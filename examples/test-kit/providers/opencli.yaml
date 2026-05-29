@@ -1,0 +1,55 @@
+version: 1
+
+provider:
+  name: opencli
+  display_name: OpenCLI
+  role: specialist
+  priority: 40
+  default_token_budget_mode: silent
+  entry_point: opencli
+
+discovery_sources:
+  adapters_index:
+    path: OpenCLI/docs/adapters/index.md
+  external_clis:
+    path: OpenCLI/src/external-clis.yaml
+
+capability_rules:
+  - section: Browser Adapters
+    mode_contains:
+      - Browser
+      - Browser Bridge
+    capability: browser_authenticated_task
+    preferred: true
+    requires_browser_session: true
+  - section: Browser Adapters
+    mode_contains:
+      - Public
+      - 🌐
+    capability: browser_public_task
+    preferred: true
+    requires_browser_session: false
+  - section: Public API Adapters
+    capability: browser_public_task
+    preferred: true
+    requires_browser_session: false
+  - section: Desktop Adapters
+    capability: desktop_app_task
+    preferred: true
+    requires_browser_session: false
+  - source: external-clis
+    capability: external_cli_passthrough
+    preferred: false
+    requires_browser_session: false
+
+entry_overrides:
+  - names:
+      - web
+    capability: browser_authenticated_task
+    preferred: true
+    note: Use for ad-hoc website reads through a live browser session.
+
+constraints:
+  - browser_authenticated_task requires a working OpenCLI browser bridge or CDP target.
+  - desktop_app_task may require a desktop app plus CDP or local integration.
+  - external_cli_passthrough should not replace CLI-Anything as the default general-purpose provider.

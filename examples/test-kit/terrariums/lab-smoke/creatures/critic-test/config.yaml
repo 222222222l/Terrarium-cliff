@@ -1,0 +1,38 @@
+name: critic-test
+version: "0.1.0"
+
+controller:
+  model: "${OPENROUTER_MODEL:google/gemini-2.5-pro}"
+  temperature: 0.1
+  max_tokens: 24576
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+
+system_prompt_file: prompts/system.md
+
+output:
+  type: stdout
+  controller_direct: true
+
+tools:
+  - name: read
+    type: builtin
+  - name: glob
+    type: builtin
+  - name: grep
+    type: builtin
+  - name: json_read
+    type: builtin
+  - name: scratchpad
+    type: builtin
+  - name: think
+    type: builtin
+  - name: info
+    type: builtin
+  - name: lab_report
+    type: custom
+    module: ../../../../test_kit/tools/lab_report.py
+    class: LabReportTool
+
+compact:
+  max_tokens: 1000000
