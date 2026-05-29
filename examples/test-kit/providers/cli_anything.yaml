@@ -1,0 +1,63 @@
+version: 1
+
+provider:
+  name: cli-anything
+  display_name: CLI-Anything
+  role: primary
+  priority: 100
+  default_token_budget_mode: silent
+  install_manager: cli-hub
+
+registry_sources:
+  official:
+    path: CLI-Anything/registry.json
+  public:
+    path: CLI-Anything/public_registry.json
+
+capability_rules:
+  - capability: local_software_task
+    preferred: true
+    categories:
+      - 3d
+      - audio
+      - debugging
+      - design
+      - diagrams
+      - game
+      - gamedev
+      - graphics
+      - image
+      - mobile
+      - music
+      - office
+      - science
+      - scientific
+      - streaming
+      - video
+  - capability: service_cli_task
+    preferred: true
+    categories:
+      - ai
+      - automation
+      - communication
+      - data-science
+      - database
+      - devops
+      - finance
+      - generation
+      - knowledge
+      - network
+      - osint
+      - project-management
+      - search
+      - testing
+      - web
+
+entry_overrides:
+  - names:
+      - browser
+      - clibrowser
+      - safari
+    capability: browser_cli_task
+    preferred: false
+    note: Prefer OpenCLI after T22 when a real browser session or login state is required.

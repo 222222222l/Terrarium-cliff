@@ -1,0 +1,25 @@
+terrarium:
+  name: lab-smoke
+
+  root:
+    config: ./creatures/root-test/
+
+  creatures:
+    - name: worker_test
+      config: ./creatures/worker-test/
+      channels:
+        listen: [tasks, feedback]
+        can_send: [review, status]
+
+    - name: critic_test
+      config: ./creatures/critic-test/
+      channels:
+        listen: [review, status]
+        can_send: [feedback, results, status]
+
+  channels:
+    tasks: { type: queue, description: "Work items to be executed" }
+    review: { type: queue, description: "Outputs waiting for critic review" }
+    feedback: { type: queue, description: "Critic feedback returned to worker" }
+    results: { type: queue, description: "Final smoke results" }
+    status: { type: broadcast, description: "Low-volume coordination channel" }

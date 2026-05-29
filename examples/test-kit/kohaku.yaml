@@ -1,0 +1,29 @@
+name: test-kit
+version: "0.1.0"
+description: "Minimal lab package for fast creature and terrarium testing"
+
+creatures:
+  - name: lab-runner
+
+terrariums:
+  - name: lab-smoke
+
+tools:
+  - name: lab_report
+    module: test_kit.tools.lab_report
+    class: LabReportTool
+  - name: cli_anything_registry
+    module: test_kit.tools.cli_anything_registry
+    class: CliAnythingRegistryTool
+  - name: cli_invoke
+    module: test_kit.tools.cli_invoke
+    class: CliInvokeTool
+  - name: opencli_registry
+    module: test_kit.tools.opencli_registry
+    class: OpenCliRegistryTool
+  - name: provider_select
+    module: test_kit.tools.provider_select
+    class: ProviderSelectTool
+  - name: result_feedback
+    module: test_kit.tools.result_feedback
+    class: ResultFeedbackTool
