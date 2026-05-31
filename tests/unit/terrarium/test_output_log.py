@@ -51,11 +51,11 @@ class _FakeOutput:
 
 class TestLogEntry:
     def test_short_preview_unchanged(self):
-        e = LogEntry(timestamp=datetime.now(), content="short")
+        e = LogEntry(timestamp=datetime.now(), sequence=1, content="short")
         assert e.preview() == "short"
 
     def test_long_preview_truncated(self):
-        e = LogEntry(timestamp=datetime.now(), content="x" * 200)
+        e = LogEntry(timestamp=datetime.now(), sequence=1, content="x" * 200)
         out = e.preview(max_len=10)
         assert out.endswith("...")
         # max_len chars + "..."
@@ -159,6 +159,17 @@ class TestOutputLogCapture:
         c.on_activity("a", "x")
         c.clear()
         assert c.entry_count == 0
+
+    async def test_cursor_and_entries_since(self):
+        fake = _FakeOutput()
+        c = OutputLogCapture(fake)
+        start = c.cursor
+        await c.write("hello")
+        c.on_activity("tool_start", "running")
+        entries = c.get_entries_since(start)
+        assert [entry.sequence for entry in entries] == [1, 2]
+        assert entries[0].content == "hello"
+        assert entries[1].metadata["activity_type"] == "tool_start"
 
     def test_reset_passthrough(self):
         fake = _FakeOutput()

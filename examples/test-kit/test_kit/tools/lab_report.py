@@ -11,6 +11,10 @@ class LabReportTool(BaseTool):
     needs_context = True
     is_concurrency_safe = False
 
+    def __init__(self, **options: Any) -> None:
+        super().__init__()
+        self._options = dict(options)
+
     @property
     def tool_name(self) -> str:
         return "lab_report"
@@ -49,10 +53,34 @@ class LabReportTool(BaseTool):
             "required": ["title", "status", "summary"],
         }
 
+    @classmethod
+    def option_schema(cls) -> dict[str, dict[str, Any]]:
+        return {
+            "reports_subdir": {
+                "type": "string",
+                "default": ".kohaku/lab-reports",
+                "description": "Relative directory for generated lab reports.",
+            }
+        }
+
+    @classmethod
+    def default_options(cls) -> dict[str, Any]:
+        return {
+            key: value.get("default")
+            for key, value in cls.option_schema().items()
+            if "default" in value
+        }
+
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         context = kwargs.get("context")
         working_dir = context.working_dir if context else Path.cwd()
-        reports_dir = working_dir / ".kohaku" / "lab-reports"
+        reports_subdir = str(
+            self._options.get(
+                "reports_subdir",
+                self.default_options().get("reports_subdir", ".kohaku/lab-reports"),
+            )
+        ).strip() or ".kohaku/lab-reports"
+        reports_dir = working_dir / reports_subdir
         reports_dir.mkdir(parents=True, exist_ok=True)
 
         title = str(args.get("title", "untitled-test")).strip() or "untitled-test"

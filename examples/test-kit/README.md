@@ -5,6 +5,7 @@ It gives you two testing layers:
 
 - `lab-runner`: a single-creature flexible test harness
 - `lab-smoke`: a minimal terrarium smoke shell for routing and feedback loops
+- `task-team-minimal`: the shortest reusable `root -> coordinator -> worker -> critic -> root` loop
 
 This package is designed for fast iteration. Use the single creature for most
 experiments, and use the terrarium only when you need to validate multi-agent
@@ -27,8 +28,17 @@ examples/test-kit/
   README.md
   creatures/
     lab-runner/
+    root-privileged/
+    coordinator/
+    worker-base/
+    critic/
+  skills/
+    provider-aware-cli-builder/
+  skill-policies/
+    creature-creation/
   terrariums/
     lab-smoke/
+    task-team-minimal/
   test_kit/
     tools/
       lab_report.py
@@ -58,12 +68,50 @@ kt terrarium run ./examples/test-kit/terrariums/lab-smoke --seed "Run a minimal 
 Use `lab-smoke` only when you need to test root-to-worker-to-critic
 coordination.
 
+### Run the minimal main-workflow team
+
+```bash
+kt terrarium run ./examples/test-kit/terrariums/task-team-minimal
+```
+
+Use `task-team-minimal` when you want to validate the full four-role baseline
+workflow rather than only a smoke shell.
+
+### Stable long-link scripts
+
+For scripted validation of the reusable long-link control layer, use:
+
+```bash
+python .\examples\test-kit\scripts\run_t8_worker_shortest_demo.py
+python .\examples\test-kit\scripts\run_t8_full_demo_stable.py
+```
+
+The current long-link runtime contract is:
+
+- worker-facing turns use the formal `LocalTerrariumService.run_input_turn(...)`
+- long-link scripts opt into `completion_scope="graph"`
+- the service waits for the whole graph to settle idle, not only the injected
+  creature
+
+This matters for `task-team-minimal` because `worker -> critic -> root` is
+driven by `output_wiring`. A single-creature idle check can return too early
+and let the outer harness shut the terrarium down while downstream roles are
+still processing.
+
+For direct role calls used by the full demo:
+
+- prefer `TASK_TEAM_BASE_URL` / `TASK_TEAM_API_KEY` / `TASK_TEAM_MODEL`
+- otherwise fall back to `OPENROUTER_API_KEY` and optional `OPENROUTER_MODEL`
+- if no API key is present, the script now fails explicitly and writes the
+  reason into the summary JSON instead of hanging at `phase=init`
+
 ### Install as an editable package
 
 ```bash
 kt install ./examples/test-kit -e
 kt run @test-kit/creatures/lab-runner
 kt terrarium run @test-kit/terrariums/lab-smoke --seed "Smoke test this package"
+kt terrarium run @test-kit/terrariums/task-team-minimal
 ```
 
 ## 4. How to Use `lab-runner`
@@ -93,6 +141,50 @@ It ships with a broad built-in toolset and these subagents:
 It also ships with a custom tool:
 
 - `lab_report`: save a structured Markdown report under `.kohaku/lab-reports/`
+
+It also publishes package skills for CLI creation workflows:
+
+- `autonomous-cli-builder`
+- `opencli-autonomous-builder`
+- `provider-aware-cli-builder`
+
+`lab-runner` opts into `provider-aware-cli-builder` through its `skills:` list,
+which makes the package skill discoverable in a real 2.0 creature config rather
+than only in project-local metadata.
+
+The package also ships a control-plane root template:
+
+- `root-privileged`: user-facing privileged root for terrarium orchestration
+- designed to inspect topology first, reuse existing nodes, and avoid doing
+  worker execution itself
+
+It also ships a lightweight routing template:
+
+- `coordinator`: compiles ambiguous requests into stable `task_card` handoffs
+- designed to stay tool-light, reuse provider routing rules, and avoid verbose
+  manager chatter
+
+It also ships a narrow execution template:
+
+- `worker-base`: executes bounded tasks with a small deterministic tool surface
+- designed for local 8B-9B class models that benefit from low temperature,
+  explicit task cards, and minimal tool choice
+
+It also ships a structured review template:
+
+- `critic`: reviews worker outputs with shared or compressed context
+- designed to feed compact review packets back into `root-privileged` or
+  `coordinator` while keeping a user-interrupt path open
+
+It also ships a reusable minimal team recipe:
+
+- `task-team-minimal`: fixed `root -> coordinator -> worker -> critic -> root`
+- designed to prove the shortest reusable closed loop before adding learning,
+  policy, or evolution layers
+- supports recipe-level model overrides so all four roles can be switched to one
+  cheap strong model during integration tests
+- long-link harnesses should treat it as a graph-scoped workflow, not a
+  single-role workflow
 
 ## 5. Recommended Testing Loop
 
@@ -133,6 +225,36 @@ Typical patterns:
 - remove a built-in tool
 - replace a custom tool module path
 - switch to a package tool after editable install
+
+### Sync module defaults into creature configs
+
+Custom tools in `test-kit` can self-describe their configurable defaults via:
+
+- `option_schema()`
+- `default_options()`
+
+After adding a new custom tool or new default option, write the defaults back to
+every personalized creature config with:
+
+```bash
+python .\examples\test-kit\scripts\sync_test_kit_module_configs.py
+```
+
+This keeps module configuration editable in `config.yaml` instead of hiding it
+in Python code.
+
+Current `test-kit` sync scope:
+
+- scans `examples/test-kit/creatures/*/config.yaml`
+- loads each custom tool class
+- reads default options from the tool
+- writes missing keys into the matching creature config
+
+Recommended rule:
+
+- define module defaults once in the module class
+- sync them into creature configs
+- let per-agent customization happen only in YAML
 
 ### Swap plugins
 
@@ -190,6 +312,21 @@ Use `lab-smoke` when:
 - you need root orchestration
 - you need worker execution plus reviewer feedback
 - you need to validate a minimal terrarium flow
+
+Use `task-team-minimal` plus the stable scripts when:
+
+- you need the full `root -> coordinator -> worker -> critic -> root` chain
+- you need to validate long-link completion semantics
+- you need to confirm downstream `output_wiring` does not get cut off by early
+  shutdown
+- you need a reusable baseline before adding more modules or personalized agents
+
+Note:
+
+- `lab-smoke` no longer uses `type: queue` or `type: broadcast` in channel
+  declarations
+- routing is expressed through `listen` / `can_send` only, which matches the
+  current 2.0 terrarium semantics
 
 ## 9. Review Checklist
 

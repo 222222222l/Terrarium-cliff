@@ -388,6 +388,16 @@ class Creature:
             return self.output_log.get_entries(last_n=last_n)
         return []
 
+    def get_log_entries_since(
+        self,
+        sequence: int,
+        *,
+        entry_type: str | None = None,
+    ) -> list[LogEntry]:
+        if self.output_log:
+            return self.output_log.get_entries_since(sequence, entry_type=entry_type)
+        return []
+
     def get_log_text(self, last_n: int = 10) -> str:
         if self.output_log:
             return self.output_log.get_text(last_n=last_n)
@@ -522,6 +532,14 @@ def build_creature(
             llm_override=llm_override,
             pwd=pwd,
         )
+        output_log = None
+        if config.output_log:
+            capture = OutputLogCapture(
+                agent.output_router.default_output,
+                max_entries=config.output_log_size,
+            )
+            agent.output_router.default_output = capture
+            output_log = capture
         cid = creature_id or _safe_creature_id(config.name)
         return Creature(
             creature_id=cid,
@@ -531,6 +549,7 @@ def build_creature(
             config=config,
             listen_channels=list(config.listen_channels),
             send_channels=list(config.send_channels),
+            output_log=output_log,
         )
 
     raise TypeError(

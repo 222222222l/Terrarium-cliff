@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from shutil import which
 from typing import Any
 
 
@@ -14,19 +16,15 @@ def execute_cli_invocation(
     invocation: dict[str, Any],
     working_dir: Path,
 ) -> dict[str, Any]:
-    command = invocation.get("command")
-    if not isinstance(command, list) or not command:
-        raise ValueError("command must be a non-empty list of strings")
-    if not all(isinstance(item, str) and item for item in command):
-        raise ValueError("command entries must be non-empty strings")
+    command = _normalize_command(invocation)
 
-    provider_name = str(invocation.get("provider_name", "unknown")).strip() or "unknown"
-    capability = str(invocation.get("capability", "unknown")).strip() or "unknown"
+    provider_name = str(invocation.get("provider_name", "cli-anything")).strip() or "cli-anything"
+    capability = str(invocation.get("capability", "")).strip() or _infer_capability(invocation, command)
     task_id = str(invocation.get("task_id", "")).strip() or _default_task_id(provider_name)
     token_budget_mode = str(invocation.get("token_budget_mode", "silent")).strip() or "silent"
     timeout_s = int(invocation.get("timeout_s", 60) or 60)
     expected_artifacts = _normalize_string_list(invocation.get("artifact_expectation"))
-    provider_detect_cmd = str(invocation.get("provider_detect_cmd", "")).strip()
+    provider_detect_cmd = str(invocation.get("provider_detect_cmd", "")).strip() or _default_detect_cmd(command)
     env_overrides = invocation.get("env") or {}
     if env_overrides and not isinstance(env_overrides, dict):
         raise ValueError("env must be a mapping of environment variables")
@@ -211,6 +209,56 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def _normalize_command(invocation: dict[str, Any]) -> list[str]:
+    url = str(invocation.get("url", "") or "").strip()
+    if url:
+        return ["curl.exe", url]
+
+    raw = invocation.get("command")
+    if isinstance(raw, list):
+        command = [str(item).strip() for item in raw if str(item).strip()]
+        if command:
+            return _normalize_command_binary(command)
+    if isinstance(raw, str) and raw.strip():
+        command = shlex.split(raw.strip(), posix=False)
+        if command:
+            return _normalize_command_binary(command)
+
+    for key in ("command_text", "content"):
+        text = str(invocation.get(key, "") or "").strip()
+        if not text:
+            continue
+        command = shlex.split(text, posix=False)
+        if command:
+            return _normalize_command_binary(command)
+
+    raise ValueError(
+        "provide one of: url, command_text, or command"
+    )
+
+
+def _normalize_command_binary(command: list[str]) -> list[str]:
+    if not command:
+        return command
+    if command[0] == "curl":
+        command[0] = "curl.exe"
+    return command
+
+
+def _infer_capability(invocation: dict[str, Any], command: list[str]) -> str:
+    if str(invocation.get("url", "") or "").strip():
+        return "http_fetch"
+    if command and command[0].lower() in {"curl", "curl.exe"}:
+        return "http_fetch"
+    return "shell_exec"
+
+
+def _default_detect_cmd(command: list[str]) -> str:
+    if not command:
+        return ""
+    return command[0]
+
+
 def _resolve_existing_artifacts(working_dir: Path, expected_artifacts: list[str]) -> list[str]:
     results: list[str] = []
     for raw_path in expected_artifacts:
@@ -248,12 +296,26 @@ def _diagnostic_excerpt(text: str, max_chars: int = 240) -> str:
 
 
 def _is_command_available(command_name: str) -> bool:
-    if command_name == "python":
+    probe_name = _extract_command_probe_name(command_name)
+    if not probe_name:
+        return False
+    if probe_name == "python":
         return True
-    if command_name == "python3":
+    if probe_name == "python3":
         return True
-    if command_name == sys.executable:
+    if probe_name == sys.executable:
         return True
-    from shutil import which
+    return which(probe_name) is not None
 
-    return which(command_name) is not None
+
+def _extract_command_probe_name(command_name: str) -> str:
+    text = str(command_name).strip()
+    if not text:
+        return ""
+    try:
+        parts = shlex.split(text, posix=False)
+    except ValueError:
+        parts = text.split()
+    if not parts:
+        return ""
+    return parts[0].strip().strip("\"'")

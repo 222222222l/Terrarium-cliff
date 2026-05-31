@@ -1,15 +1,31 @@
 from __future__ import annotations
+import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
-from test_kit.feedback_protocol import build_feedback_payload
+try:
+    from test_kit.feedback_protocol import build_feedback_payload
+except ModuleNotFoundError:
+    module_path = Path(__file__).resolve().parents[1] / "feedback_protocol.py"
+    spec = importlib.util.spec_from_file_location("test_kit.feedback_protocol", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load feedback_protocol from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["test_kit.feedback_protocol"] = module
+    spec.loader.exec_module(module)
+    build_feedback_payload = module.build_feedback_payload
 
 
 class ResultFeedbackTool(BaseTool):
     needs_context = True
     is_concurrency_safe = True
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__()
+        self._options = dict(options)
 
     @property
     def tool_name(self) -> str:
@@ -77,10 +93,35 @@ class ResultFeedbackTool(BaseTool):
             "required": ["tool_name", "call_status", "current_action"],
         }
 
+    @classmethod
+    def option_schema(cls) -> dict[str, dict[str, Any]]:
+        return {
+            "agent_format": {
+                "type": "enum",
+                "default": "json",
+                "values": ["json", "xml"],
+                "description": "Default agent-facing feedback format.",
+            }
+        }
+
+    @classmethod
+    def default_options(cls) -> dict[str, Any]:
+        return {
+            key: value.get("default")
+            for key, value in cls.option_schema().items()
+            if "default" in value
+        }
+
+    def _merge_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        merged = self.default_options()
+        merged.update(self._options)
+        merged.update({key: value for key, value in args.items() if value is not None})
+        return merged
+
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         context = kwargs.get("context")
         working_dir = Path(context.working_dir) if context else Path.cwd()
-        payload = build_feedback_payload(args, working_dir)
+        payload = build_feedback_payload(self._merge_args(args), working_dir)
         return ToolResult(
             output=payload["user_feedback"],
             exit_code=0,

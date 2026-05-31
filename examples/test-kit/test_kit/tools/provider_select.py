@@ -1,17 +1,33 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 import json
 from pathlib import Path
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
-from test_kit.provider_selection import select_provider_for_task
+try:
+    from test_kit.provider_selection import select_provider_for_task
+except ModuleNotFoundError:
+    module_path = Path(__file__).resolve().parents[1] / "provider_selection.py"
+    spec = importlib.util.spec_from_file_location("test_kit.provider_selection", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load provider_selection from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["test_kit.provider_selection"] = module
+    spec.loader.exec_module(module)
+    select_provider_for_task = module.select_provider_for_task
 
 
 class ProviderSelectTool(BaseTool):
     needs_context = True
     is_concurrency_safe = True
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__()
+        self._options = dict(options)
 
     @property
     def tool_name(self) -> str:
@@ -62,14 +78,39 @@ class ProviderSelectTool(BaseTool):
             },
         }
 
+    @classmethod
+    def option_schema(cls) -> dict[str, dict[str, Any]]:
+        return {
+            "registry_path": {
+                "type": "string",
+                "default": "",
+                "description": "Optional default registry path override.",
+            }
+        }
+
+    @classmethod
+    def default_options(cls) -> dict[str, Any]:
+        return {
+            key: value.get("default")
+            for key, value in cls.option_schema().items()
+            if "default" in value
+        }
+
+    def _merge_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        merged = self.default_options()
+        merged.update(self._options)
+        merged.update({key: value for key, value in args.items() if value is not None})
+        return merged
+
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         context = kwargs.get("context")
         start_dir = Path(context.working_dir) if context else Path.cwd()
         repo_root = self._find_repo_root(start_dir)
-        registry_path = args.get("registry_path")
+        merged_args = self._merge_args(args)
+        registry_path = merged_args.get("registry_path")
 
         result = select_provider_for_task(
-            task_card=args,
+            task_card=merged_args,
             repo_root=repo_root,
             registry_path=Path(str(registry_path)).resolve() if registry_path else None,
         )

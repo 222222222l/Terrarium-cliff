@@ -556,9 +556,9 @@ class TerrariumRuntimeAdapter:
                 cid = msg.body["creature_id"]
                 creature = self._require_hosted(cid)
                 agent = creature.agent
-                jobs = [j.to_dict() for j in agent.executor.get_running_jobs()]
+                jobs = [service._job_to_dict(j) for j in agent.executor.get_running_jobs()]
                 jobs.extend(
-                    j.to_dict() for j in agent.subagent_manager.get_running_jobs()
+                    service._job_to_dict(j) for j in agent.subagent_manager.get_running_jobs()
                 )
                 return {"jobs": jobs}
 

@@ -30,8 +30,12 @@ DTOs vs live objects:
   inside Phase 0 before W1 migration).
 """
 
+import asyncio
+import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from kohakuterrarium.core.channel import ChannelMessage as _ChannelMessage
@@ -75,6 +79,43 @@ from kohakuterrarium.terrarium.topology import (
     GraphTopology,
     TopologyDelta,
 )
+
+def _jsonify_job_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "value"):
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, (str, int, float, bool)) or enum_value is None:
+            return enum_value
+    if is_dataclass(value):
+        return {
+            str(k): _jsonify_job_value(v) for k, v in asdict(value).items()
+        }
+    if isinstance(value, dict):
+        return {str(k): _jsonify_job_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonify_job_value(v) for v in value]
+    return value
+
+
+def _job_to_dict(job: Any) -> dict[str, Any]:
+    if hasattr(job, "to_dict") and callable(job.to_dict):
+        raw = job.to_dict()
+        if isinstance(raw, dict):
+            return {str(k): _jsonify_job_value(v) for k, v in raw.items()}
+    if is_dataclass(job):
+        return {str(k): _jsonify_job_value(v) for k, v in asdict(job).items()}
+    if isinstance(job, dict):
+        return {str(k): _jsonify_job_value(v) for k, v in job.items()}
+    data = getattr(job, "__dict__", None)
+    if isinstance(data, dict):
+        return {
+            str(k): _jsonify_job_value(v)
+            for k, v in data.items()
+            if not str(k).startswith("_")
+        }
+    return {"repr": repr(job)}
+
 
 
 @dataclass(frozen=True)
@@ -302,6 +343,39 @@ class TerrariumService(Protocol):
         *,
         source: str = "chat",
     ) -> None: ...
+
+    async def wait_until_idle(
+        self,
+        creature_id: str,
+        *,
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        require_activity: bool = False,
+    ) -> dict[str, Any]: ...
+
+    async def wait_until_graph_idle(
+        self,
+        graph_id: str,
+        *,
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        require_activity: bool = False,
+        assume_activity: bool = False,
+    ) -> dict[str, Any]: ...
+
+    async def run_input_turn(
+        self,
+        creature_id: str,
+        message: str | list[dict[str, Any]],
+        *,
+        source: str = "chat",
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        completion_scope: str = "creature",
+    ) -> dict[str, Any]: ...
 
     def chat(
         self,
@@ -716,6 +790,190 @@ class LocalTerrariumService:
         creature = self._engine.get_creature(creature_id)
         await creature.inject_input(message, source=source)
 
+    async def wait_until_idle(
+        self,
+        creature_id: str,
+        *,
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        require_activity: bool = False,
+    ) -> dict[str, Any]:
+        """Wait until a creature is idle and has no running jobs.
+
+        This is a local convenience for harnesses and scripted workflows
+        that need a stable turn-completion barrier instead of ad-hoc
+        polling on chat history or file timestamps.
+        """
+        creature = self._engine.get_creature(creature_id)
+        deadline = time.monotonic() + timeout_s
+        activity_seen = creature.status == "busy"
+        idle_since: float | None = None
+        last_snapshot: tuple[str, int, bool] | None = None
+
+        while time.monotonic() < deadline:
+            status = creature.status
+            jobs = await self.list_jobs(creature_id)
+            if status in {"error", "stopped"}:
+                raise RuntimeError(
+                    f"Creature {creature_id!r} became {status} while waiting for idle"
+                )
+            if status == "busy" or jobs:
+                activity_seen = True
+                idle_since = None
+            elif status == "idle":
+                if not require_activity or activity_seen:
+                    if idle_since is None:
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since >= idle_settle_s:
+                        return {
+                            "creature_id": creature_id,
+                            "status": status,
+                            "jobs": jobs,
+                            "activity_seen": activity_seen,
+                        }
+            await asyncio.sleep(poll_interval_s)
+
+        raise TimeoutError(
+            f"Creature {creature_id!r} did not settle to idle within {timeout_s}s"
+        )
+
+    async def wait_until_graph_idle(
+        self,
+        graph_id: str,
+        *,
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        require_activity: bool = False,
+        assume_activity: bool = False,
+    ) -> dict[str, Any]:
+        """Wait until every creature in a graph is idle and has no jobs.
+
+        This is the stable barrier for long-link workflows where one
+        creature's output wiring triggers downstream peers. A single
+        creature can be idle while the graph is still processing.
+        """
+        graph = self._engine.get_graph(graph_id)
+        creature_ids = sorted(graph.creature_ids)
+        deadline = time.monotonic() + timeout_s
+        activity_seen = assume_activity or any(
+            self._engine.get_creature(cid).status == "busy" for cid in creature_ids
+        )
+        idle_since: float | None = None
+        last_snapshot: tuple[tuple[tuple[str, str], ...], tuple[tuple[str, int], ...], bool] | None = None
+
+        while time.monotonic() < deadline:
+            statuses: dict[str, str] = {}
+            job_counts: dict[str, int] = {}
+            active_creatures: list[str] = []
+            for cid in creature_ids:
+                creature = self._engine.get_creature(cid)
+                status = creature.status
+                jobs = await self.list_jobs(cid)
+                if status in {"error", "stopped"}:
+                    raise RuntimeError(
+                        f"Creature {cid!r} became {status} while waiting for graph {graph_id!r} idle"
+                    )
+                statuses[cid] = status
+                job_counts[cid] = len(jobs)
+                if status == "busy" or jobs:
+                    active_creatures.append(cid)
+
+            snapshot = (
+                tuple(sorted(statuses.items())),
+                tuple(sorted(job_counts.items())),
+                activity_seen,
+            )
+            last_snapshot = snapshot
+
+            if active_creatures:
+                activity_seen = True
+                idle_since = None
+            elif all(status == "idle" for status in statuses.values()):
+                if not require_activity or activity_seen:
+                    if idle_since is None:
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since >= idle_settle_s:
+                        return {
+                            "graph_id": graph_id,
+                            "creature_ids": creature_ids,
+                            "statuses": statuses,
+                            "job_counts": job_counts,
+                            "activity_seen": activity_seen,
+                        }
+            await asyncio.sleep(poll_interval_s)
+
+        raise TimeoutError(
+            f"Graph {graph_id!r} did not settle to idle within {timeout_s}s"
+        )
+
+    async def run_input_turn(
+        self,
+        creature_id: str,
+        message: str | list[dict[str, Any]],
+        *,
+        source: str = "chat",
+        timeout_s: float = 120.0,
+        idle_settle_s: float = 0.35,
+        poll_interval_s: float = 0.05,
+        completion_scope: str = "creature",
+    ) -> dict[str, Any]:
+        """Inject one input turn and return a stable post-turn snapshot.
+
+        Uses the creature's optional output log when available to return
+        only the entries produced by this turn. Recipes can enable it via
+        ``output_log: true`` on the creature config.
+        """
+        creature = self._engine.get_creature(creature_id)
+        log_cursor = creature.output_log.cursor if creature.output_log else 0
+        processed = await creature.agent.inject_input(message, source=source)
+        if completion_scope == "creature":
+            await self.wait_until_idle(
+                creature_id,
+                timeout_s=timeout_s,
+                idle_settle_s=idle_settle_s,
+                poll_interval_s=poll_interval_s,
+                require_activity=not processed,
+            )
+        elif completion_scope == "graph":
+            await self.wait_until_graph_idle(
+                creature.graph_id,
+                timeout_s=timeout_s,
+                idle_settle_s=idle_settle_s,
+                poll_interval_s=poll_interval_s,
+                require_activity=False,
+                assume_activity=True,
+            )
+        else:
+            raise ValueError(
+                "completion_scope must be 'creature' or 'graph'"
+            )
+        entries = creature.get_log_entries_since(log_cursor)
+        text_entries = [
+            entry.content
+            for entry in entries
+            if entry.entry_type in {"text", "stream_flush"} and entry.content
+        ]
+        activities = [
+            {
+                "sequence": entry.sequence,
+                "detail": entry.content,
+                "activity_type": entry.metadata.get("activity_type"),
+            }
+            for entry in entries
+            if entry.entry_type == "activity"
+        ]
+        return {
+            "creature_id": creature_id,
+            "processed_immediately": processed,
+            "output_text": "".join(text_entries).strip(),
+            "log_entries": entries,
+            "activities": activities,
+            "status": creature.status,
+            "completion_scope": completion_scope,
+        }
+
     def chat(
         self,
         creature_id: str,
@@ -736,8 +994,8 @@ class LocalTerrariumService:
 
     async def list_jobs(self, creature_id: str) -> list[dict[str, Any]]:
         agent = self._engine.get_creature(creature_id).agent
-        jobs = [j.to_dict() for j in agent.executor.get_running_jobs()]
-        jobs.extend(j.to_dict() for j in agent.subagent_manager.get_running_jobs())
+        jobs = [_job_to_dict(j) for j in agent.executor.get_running_jobs()]
+        jobs.extend(_job_to_dict(j) for j in agent.subagent_manager.get_running_jobs())
         return jobs
 
     async def stop_job(self, creature_id: str, job_id: str) -> bool:

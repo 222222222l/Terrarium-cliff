@@ -1,0 +1,43 @@
+name: coordinator
+version: 0.1.0
+description: Structured task-card compiler and routing coordinator
+controller:
+  model: ${OPENROUTER_MODEL:google/gemini-2.5-pro}
+  temperature: 0.1
+  max_tokens: 32768
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+system_prompt_file: prompts/system.md
+output:
+  type: stdout
+  controller_direct: true
+tools:
+- name: scratchpad
+  type: builtin
+- name: think
+  type: builtin
+- name: info
+  type: builtin
+- name: stop_task
+  type: builtin
+- name: provider_select
+  type: custom
+  module: ../../test_kit/tools/provider_select.py
+  class: ProviderSelectTool
+  registry_path: ''
+- name: lab_report
+  type: custom
+  module: ../../test_kit/tools/lab_report.py
+  class: LabReportTool
+  reports_subdir: .kohaku/lab-reports
+subagents:
+- name: plan
+  type: builtin
+- name: explore
+  type: builtin
+- name: summarize
+  type: builtin
+memory:
+  path: ./memory
+compact:
+  max_tokens: 1000000

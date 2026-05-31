@@ -16,6 +16,7 @@ class LogEntry:
     """A single entry in the output log."""
 
     timestamp: datetime
+    sequence: int
     content: str
     entry_type: str = "text"  # "text", "stream_flush", "activity"
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -49,6 +50,25 @@ class OutputLogCapture:
         self._entries: deque[LogEntry] = deque(maxlen=max_entries)
         self._stream_buffer: str = ""
         self._max_entries = max_entries
+        self._next_sequence = 1
+
+    def _append_entry(
+        self,
+        *,
+        content: str,
+        entry_type: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self._entries.append(
+            LogEntry(
+                timestamp=datetime.now(),
+                sequence=self._next_sequence,
+                content=content,
+                entry_type=entry_type,
+                metadata=dict(metadata or {}),
+            )
+        )
+        self._next_sequence += 1
 
     # ------------------------------------------------------------------
     # OutputModule protocol
@@ -67,13 +87,7 @@ class OutputLogCapture:
         """Write content to wrapped module and log it."""
         await self._wrapped.write(content)
         if content:
-            self._entries.append(
-                LogEntry(
-                    timestamp=datetime.now(),
-                    content=content,
-                    entry_type="text",
-                )
-            )
+            self._append_entry(content=content, entry_type="text")
 
     async def write_stream(self, chunk: str) -> None:
         """Stream a chunk to wrapped module and accumulate in buffer."""
@@ -84,13 +98,7 @@ class OutputLogCapture:
         """Flush wrapped module and log any accumulated stream buffer."""
         await self._wrapped.flush()
         if self._stream_buffer:
-            self._entries.append(
-                LogEntry(
-                    timestamp=datetime.now(),
-                    content=self._stream_buffer,
-                    entry_type="stream_flush",
-                )
-            )
+            self._append_entry(content=self._stream_buffer, entry_type="stream_flush")
             self._stream_buffer = ""
 
     async def on_processing_start(self) -> None:
@@ -104,13 +112,10 @@ class OutputLogCapture:
     def on_activity(self, activity_type: str, detail: str) -> None:
         """Forward activity to wrapped module and log it."""
         self._wrapped.on_activity(activity_type, detail)
-        self._entries.append(
-            LogEntry(
-                timestamp=datetime.now(),
-                content=detail,
-                entry_type="activity",
-                metadata={"activity_type": activity_type},
-            )
+        self._append_entry(
+            content=detail,
+            entry_type="activity",
+            metadata={"activity_type": activity_type},
         )
 
     # ------------------------------------------------------------------
@@ -128,6 +133,18 @@ class OutputLogCapture:
             entries = [e for e in entries if e.entry_type == entry_type]
         return entries[-last_n:]
 
+    def get_entries_since(
+        self,
+        sequence: int,
+        *,
+        entry_type: str | None = None,
+    ) -> list[LogEntry]:
+        """Return entries emitted strictly after ``sequence``."""
+        entries = [entry for entry in self._entries if entry.sequence > sequence]
+        if entry_type:
+            entries = [entry for entry in entries if entry.entry_type == entry_type]
+        return entries
+
     def get_text(self, last_n: int = 10) -> str:
         """Get recent text output concatenated (excludes activity)."""
         text_entries = self.get_entries(last_n=last_n, entry_type=None)
@@ -144,6 +161,11 @@ class OutputLogCapture:
     def entry_count(self) -> int:
         """Number of entries currently in the log."""
         return len(self._entries)
+
+    @property
+    def cursor(self) -> int:
+        """Monotonic cursor for incremental reads."""
+        return self._next_sequence - 1
 
     # ------------------------------------------------------------------
     # Pass-through helpers

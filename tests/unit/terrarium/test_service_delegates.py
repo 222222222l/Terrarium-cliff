@@ -8,11 +8,13 @@ service delegates exercise.  This file targets those delegates with a
 mock-style agent so each branch flips.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from kohakuterrarium.core.job import JobState, JobStatus, JobType
 from kohakuterrarium.modules.plugin.base import BasePlugin
 from kohakuterrarium.modules.plugin.manager import PluginManager
 from kohakuterrarium.terrarium import service as svc_mod
@@ -68,6 +70,7 @@ class _MockAgent:
         self._processing_task = None
         self._direct_job_meta = {}
         self.input_module = None
+        self.inject_input = AsyncMock(return_value=True)
 
     def get_system_prompt(self):
         return "you are X"
@@ -87,6 +90,15 @@ class _MockCreature:
         self.parent_creature_id = None
         self.listen_channels = []
         self.send_channels = []
+        self.output_log = None
+        self._status = "idle"
+
+    @property
+    def status(self):
+        return self._status
+
+    def get_log_entries_since(self, *_args, **_kwargs):
+        return []
 
 
 def _build_service():
@@ -107,6 +119,7 @@ def _build_service():
     engine.status = MagicMock(return_value={})
     engine.list_creatures = MagicMock(return_value=[])
     engine.list_graphs = MagicMock(return_value=[])
+    engine.get_graph = MagicMock(return_value=SimpleNamespace(creature_ids={"cid"}))
     engine._environments = {}
     engine._creatures = {}
     engine._session_stores = {}
@@ -205,6 +218,145 @@ class TestInteraction:
         svc, c = _build_service()
         stream = svc.chat("cid", "hi")
         assert stream is c.chat.return_value
+
+    async def test_wait_until_idle_after_busy(self):
+        svc, c = _build_service()
+        c._status = "busy"
+
+        async def _settle():
+            await asyncio.sleep(0.01)
+            c._status = "idle"
+
+        task = asyncio.create_task(_settle())
+        try:
+            result = await svc.wait_until_idle(
+                "cid",
+                timeout_s=1.0,
+                idle_settle_s=0.01,
+                poll_interval_s=0.005,
+                require_activity=True,
+            )
+        finally:
+            await task
+        assert result["status"] == "idle"
+        assert result["activity_seen"] is True
+
+    async def test_run_input_turn_returns_incremental_output(self):
+        svc, c = _build_service()
+        c.output_log = SimpleNamespace(cursor=4)
+        c.get_log_entries_since = MagicMock(
+            return_value=[
+                SimpleNamespace(
+                    sequence=5,
+                    content="```yaml\nexecution_packet:\n  ok: true\n```",
+                    entry_type="stream_flush",
+                    metadata={},
+                ),
+                SimpleNamespace(
+                    sequence=6,
+                    content="Processed message from worker",
+                    entry_type="activity",
+                    metadata={"activity_type": "processing_complete"},
+                ),
+            ]
+        )
+        result = await svc.run_input_turn(
+            "cid",
+            "hello",
+            source="api",
+            timeout_s=1.0,
+            idle_settle_s=0.01,
+            poll_interval_s=0.005,
+        )
+        c.agent.inject_input.assert_awaited_once_with("hello", source="api")
+        assert result["processed_immediately"] is True
+        assert "execution_packet" in result["output_text"]
+        assert result["activities"][0]["activity_type"] == "processing_complete"
+
+    async def test_wait_until_graph_idle_waits_for_other_creatures(self):
+        svc, c = _build_service()
+        other = _MockCreature()
+        other.creature_id = "c2"
+        other.name = "bob"
+        other._status = "busy"
+        creatures = {"cid": c, "c2": other}
+        svc._engine.get_graph.return_value = SimpleNamespace(creature_ids={"cid", "c2"})
+        svc._engine.get_creature.side_effect = lambda cid: creatures[cid]
+
+        async def _settle():
+            await asyncio.sleep(0.01)
+            other._status = "idle"
+
+        task = asyncio.create_task(_settle())
+        try:
+            result = await svc.wait_until_graph_idle(
+                "g1",
+                timeout_s=1.0,
+                idle_settle_s=0.01,
+                poll_interval_s=0.005,
+                assume_activity=True,
+            )
+        finally:
+            await task
+        assert result["statuses"]["c2"] == "idle"
+        assert result["activity_seen"] is True
+
+    async def test_run_input_turn_graph_scope_uses_graph_barrier(self):
+        svc, c = _build_service()
+        c.output_log = SimpleNamespace(cursor=0)
+        c.get_log_entries_since = MagicMock(return_value=[])
+        svc.wait_until_idle = AsyncMock()
+        svc.wait_until_graph_idle = AsyncMock(
+            return_value={
+                "graph_id": "g1",
+                "creature_ids": ["cid"],
+                "statuses": {"cid": "idle"},
+                "job_counts": {"cid": 0},
+                "activity_seen": True,
+            }
+        )
+
+        result = await svc.run_input_turn(
+            "cid",
+            "hello",
+            source="api",
+            timeout_s=1.0,
+            idle_settle_s=0.01,
+            poll_interval_s=0.005,
+            completion_scope="graph",
+        )
+
+        svc.wait_until_idle.assert_not_awaited()
+        svc.wait_until_graph_idle.assert_awaited_once_with(
+            "g1",
+            timeout_s=1.0,
+            idle_settle_s=0.01,
+            poll_interval_s=0.005,
+            require_activity=False,
+            assume_activity=True,
+        )
+        assert result["completion_scope"] == "graph"
+
+    async def test_list_jobs_accepts_jobstatus_objects_without_to_dict(self):
+        svc, c = _build_service()
+        c.agent.executor.get_running_jobs = MagicMock(
+            return_value=[
+                JobStatus(
+                    job_id="job-1",
+                    job_type=JobType.TOOL,
+                    type_name="cli_invoke",
+                    state=JobState.RUNNING,
+                    context={"source": "worker"},
+                )
+            ]
+        )
+
+        jobs = await svc.list_jobs("cid")
+
+        assert jobs[0]["job_id"] == "job-1"
+        assert jobs[0]["job_type"] == "tool"
+        assert jobs[0]["state"] == "running"
+        assert jobs[0]["context"]["source"] == "worker"
 
 
 # ── per-creature control (jobs / interrupt) ───────────────────
