@@ -1,0 +1,52 @@
+/**
+ * Scratchpad store — talks to the Phase 1 read-only API to fetch and
+ * patch an agent's scratchpad. Fetch-on-demand only (no polling).
+ */
+
+import { defineStore } from "pinia"
+import { ref } from "vue"
+
+import { terrariumAPI } from "@/utils/api"
+
+export const useScratchpadStore = defineStore("scratchpad", () => {
+  const byAgent = ref(/** @type {Record<string, Record<string, string>>} */ ({}))
+  const loading = ref(/** @type {Record<string, boolean>} */ ({}))
+  const error = ref(/** @type {Record<string, string>} */ ({}))
+
+  async function fetch(sessionId, target = null) {
+    if (!sessionId || !target) return
+    const key = `${sessionId}:${target}`
+    loading.value = { ...loading.value, [key]: true }
+    try {
+      // Unified routing — every session has a graph_id and creatures
+      // keyed by name. ``terrariumAPI.getScratchpad`` calls
+      // ``/sessions/{sid}/creatures/{target}/scratchpad`` which
+      // resolves both solo (1-creature graph) and multi-creature.
+      const data = await terrariumAPI.getScratchpad(sessionId, target)
+      byAgent.value = { ...byAgent.value, [key]: data }
+      const next = { ...error.value }
+      delete next[key]
+      error.value = next
+    } catch (err) {
+      error.value = { ...error.value, [key]: String(err?.message || err) }
+    } finally {
+      loading.value = { ...loading.value, [key]: false }
+    }
+  }
+
+  async function patch(sessionId, updates, target = null) {
+    if (!sessionId || !target) return
+    const key = `${sessionId}:${target}`
+    const data = await terrariumAPI.patchScratchpad(sessionId, target, updates)
+    byAgent.value = { ...byAgent.value, [key]: data }
+    return data
+  }
+
+  function getFor(sessionId, target = null) {
+    if (!sessionId || !target) return {}
+    const key = `${sessionId}:${target}`
+    return byAgent.value[key] || {}
+  }
+
+  return { byAgent, loading, error, fetch, patch, getFor }
+})

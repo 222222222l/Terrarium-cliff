@@ -1,0 +1,343 @@
+<template>
+  <el-dialog v-model="visible" :title="t('hostPicker.title')" width="560px" :close-on-click-modal="true" align-center class="host-picker-dialog">
+    <!-- Inner scroll container — Element Plus's default dialog grows
+         freely with content, which pushes the page scrollbar on
+         narrow viewports.  Cap at 70vh so long host lists + the QR
+         scanner scroll INSIDE the modal instead of the page. -->
+    <div class="flex flex-col gap-4 text-[13px] max-h-[70vh] overflow-y-auto pr-1 -mr-1">
+      <!-- Active-host session (L4).  Only shown when the active host
+           advertises user accounts.  This is the primary, always-
+           visible "log in" entry — including for same-origin, which
+           has no row-level login button. -->
+      <section v-if="auth.multiUserEnabled" class="flex flex-col gap-1">
+        <h3 class="text-[11px] uppercase tracking-wider text-warm-400 font-medium px-1">
+          {{ t("hostPicker.session") }}
+        </h3>
+        <div class="flex items-center gap-2 px-2 py-1.5 rounded bg-warm-100 dark:bg-warm-800/50">
+          <span class="i-carbon-user-avatar text-iolite text-lg shrink-0" aria-hidden="true" />
+          <div class="flex-1 min-w-0">
+            <span v-if="auth.currentUser" class="block truncate text-warm-700 dark:text-warm-300">
+              {{ t("auth.account.signedInAs", { username: auth.currentUser.username }) }}
+            </span>
+            <span v-else class="block text-warm-400">{{ t("hostPicker.notSignedIn") }}</span>
+          </div>
+          <el-button v-if="auth.currentUser" size="small" @click="onLogoutActive">
+            {{ t("auth.user.logout") }}
+          </el-button>
+          <el-button v-else size="small" type="primary" @click="onLoginActive">
+            <span class="i-carbon-login mr-1" />
+            {{ t("auth.login.title") }}
+          </el-button>
+        </div>
+      </section>
+
+      <!-- Saved hosts list -->
+      <section class="flex flex-col gap-1">
+        <h3 class="text-[11px] uppercase tracking-wider text-warm-400 font-medium px-1">
+          {{ t("hostPicker.listTitle") }}
+        </h3>
+        <ul class="flex flex-col gap-1">
+          <li>
+            <button type="button" class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left transition-colors" :class="hosts.isSameOrigin ? 'bg-iolite/10 text-iolite dark:text-iolite-light' : 'text-warm-700 dark:text-warm-300 hover:bg-warm-100 dark:hover:bg-warm-800'" @click="onUseSameOrigin">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="hosts.isSameOrigin ? 'bg-iolite' : 'bg-warm-400'" aria-hidden="true" />
+              <span class="flex-1 min-w-0">
+                <span class="font-medium block truncate">{{ t("hostPicker.sameOrigin") }}</span>
+                <span class="block text-[11px] text-warm-400 truncate">{{ t("hostPicker.sameOriginHint") }}</span>
+              </span>
+              <span v-if="hosts.isSameOrigin" class="i-carbon-checkmark text-iolite text-[12px] shrink-0" aria-hidden="true" />
+            </button>
+          </li>
+          <li v-for="h in hosts.hosts" :key="h.id">
+            <div class="flex items-center gap-2 px-2 py-1.5 rounded transition-colors group" :class="hosts.activeHostId === h.id ? 'bg-iolite/10' : 'hover:bg-warm-100 dark:hover:bg-warm-800'">
+              <button type="button" class="flex-1 min-w-0 flex items-center gap-2 text-left" :title="t('hostPicker.activate')" @click="onActivate(h.id)">
+                <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="hosts.activeHostId === h.id ? 'bg-iolite' : 'bg-warm-400'" aria-hidden="true" />
+                <span class="flex-1 min-w-0">
+                  <span class="font-medium block truncate" :class="hosts.activeHostId === h.id ? 'text-iolite dark:text-iolite-light' : 'text-warm-700 dark:text-warm-300'">{{ h.name }}</span>
+                  <span class="block text-[11px] text-warm-400 truncate font-mono">
+                    {{ h.url }}<span v-if="h.token" class="text-aquamarine"> · {{ t("hostPicker.tokenSet") }}</span
+                    ><span v-if="h.adminToken" class="text-iolite"> · {{ t("hostPicker.adminTokenSet") }}</span
+                    ><span v-if="h.currentUser" class="text-iolite"> · {{ h.currentUser.username }}</span>
+                  </span>
+                </span>
+                <span v-if="hosts.activeHostId === h.id" class="i-carbon-checkmark text-iolite text-[12px] shrink-0" aria-hidden="true" />
+              </button>
+              <button v-if="h.currentUser" type="button" class="w-9 h-9 sm:w-6 sm:h-6 flex items-center justify-center rounded text-iolite hover:text-coral hover:bg-warm-100 dark:hover:bg-warm-800 transition-colors hover-only-action" :title="t('auth.user.menuTitle', { username: h.currentUser.username }) + ' — ' + t('auth.user.logout')" @click="onLogout(h)">
+                <span class="i-carbon-logout text-sm sm:text-[11px]" />
+              </button>
+              <button v-else-if="canLoginOnHost(h)" type="button" class="w-9 h-9 sm:w-6 sm:h-6 flex items-center justify-center rounded text-warm-400 hover:text-iolite hover:bg-warm-100 dark:hover:bg-warm-800 transition-colors hover-only-action" :title="t('auth.login.title')" @click="onLogin(h)">
+                <span class="i-carbon-login text-sm sm:text-[11px]" />
+              </button>
+              <button type="button" class="w-9 h-9 sm:w-6 sm:h-6 flex items-center justify-center rounded text-warm-400 hover:text-iolite hover:bg-warm-100 dark:hover:bg-warm-800 transition-colors hover-only-action" :title="t('hostPicker.editAction')" @click="onEdit(h)">
+                <span class="i-carbon-edit text-sm sm:text-[11px]" />
+              </button>
+              <button type="button" class="w-9 h-9 sm:w-6 sm:h-6 flex items-center justify-center rounded text-warm-400 hover:text-coral hover:bg-warm-100 dark:hover:bg-warm-800 transition-colors hover-only-action" :title="t('hostPicker.removeAction')" @click="onRemove(h)">
+                <span class="i-carbon-trash-can text-sm sm:text-[11px]" />
+              </button>
+            </div>
+          </li>
+          <li v-if="hosts.hosts.length === 0" class="text-[11px] text-warm-400 italic px-2 py-1">
+            {{ t("hostPicker.noHosts") }}
+          </li>
+        </ul>
+      </section>
+
+      <!-- Add / edit form.  Uses the project's canonical ``input-field``
+           UnoCSS shortcut (defined in ``uno.config.js``) — el-input
+           inside an el-dialog teleports through the Element Plus
+           theme bridge inconsistently across viewports, leaving the
+           input background stuck on light-mode white in dark mode.
+           The raw ``input`` + ``input-field`` shortcut binds bg /
+           border / text / placeholder / focus to warm-* tokens
+           directly, so it tracks the html.dark class reliably. -->
+      <section class="flex flex-col gap-2 pt-3 border-t border-warm-200 dark:border-warm-700">
+        <h3 class="text-[11px] uppercase tracking-wider text-warm-400 font-medium px-1">
+          {{ isEditingId ? t("hostPicker.edit") : t("hostPicker.add") }}
+        </h3>
+        <div class="flex flex-col gap-2">
+          <div>
+            <label class="text-[11px] text-warm-400 block mb-1">{{ t("hostPicker.name") }}</label>
+            <input v-model="form.name" type="text" autocomplete="off" class="input-field" :placeholder="t('hostPicker.namePlaceholder')" />
+          </div>
+          <div>
+            <label class="text-[11px] text-warm-400 block mb-1">{{ t("hostPicker.url") }}</label>
+            <input v-model="form.url" type="url" autocomplete="off" class="input-field font-mono" :placeholder="t('hostPicker.urlPlaceholder')" :disabled="isEditingId !== null" @keydown.enter="onSubmitForm" />
+          </div>
+          <div>
+            <label class="text-[11px] text-warm-400 block mb-1">
+              {{ t("hostPicker.token") }}
+              <span class="text-warm-400 font-normal">{{ t("hostPicker.tokenOptional") }}</span>
+            </label>
+            <input v-model="form.token" type="password" autocomplete="off" class="input-field font-mono" :placeholder="t('hostPicker.tokenPlaceholder')" @keydown.enter="onSubmitForm" />
+          </div>
+          <div>
+            <label class="text-[11px] text-warm-400 block mb-1">
+              {{ t("hostPicker.adminToken") }}
+              <span class="text-warm-400 font-normal">{{ t("hostPicker.adminTokenOptional") }}</span>
+            </label>
+            <input v-model="form.adminToken" type="password" autocomplete="off" class="input-field font-mono" :placeholder="t('hostPicker.adminTokenPlaceholder')" @keydown.enter="onSubmitForm" />
+          </div>
+          <p v-if="errorMessage" class="text-[12px] text-coral mt-1">{{ errorMessage }}</p>
+          <div class="flex items-center justify-end gap-2 mt-1">
+            <el-button v-if="isEditingId" size="small" @click="resetForm">{{ t("common.cancel") }}</el-button>
+            <el-button v-if="isEditingId" size="small" type="primary" @click="onSaveEdit">
+              {{ t("hostPicker.submitEdit") }}
+            </el-button>
+            <el-button v-else size="small" type="primary" :disabled="!isFormValid" @click="onSubmitForm">
+              <span class="i-carbon-add mr-1" />
+              {{ t("hostPicker.submitAdd") }}
+            </el-button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Inline login pane — appears when the user clicks "Log in"
+           on a host that has multi_user enabled.  The pane lives
+           inside the modal so the user can switch hosts without
+           leaving the picker context. -->
+      <section v-if="loginForHostId" class="flex flex-col gap-2 pt-3 border-t border-warm-200 dark:border-warm-700">
+        <LoginPane :cancellable="true" @success="onLoginSuccess" @cancel="loginForHostId = null" />
+      </section>
+
+      <!-- QR scanner -->
+      <section v-if="!isEditingId && !loginForHostId" class="flex flex-col gap-2 pt-3 border-t border-warm-200 dark:border-warm-700">
+        <h3 class="text-[11px] uppercase tracking-wider text-warm-400 font-medium px-1">
+          {{ t("hostPicker.qrTitle") }}
+        </h3>
+        <QrScanner @scan="onQrScan" @cancel="() => {}" />
+      </section>
+    </div>
+  </el-dialog>
+</template>
+
+<script setup>
+import { computed, ref, watch } from "vue"
+import { ElMessage, ElMessageBox } from "element-plus"
+
+import LoginPane from "@/components/auth/LoginPane.vue"
+import QrScanner from "@/components/host-picker/QrScanner.vue"
+import { useConnectIntent } from "@/composables/useConnectIntent"
+import { useAuthStore } from "@/stores/auth"
+import { useHostsStore } from "@/stores/hosts"
+import { useI18n } from "@/utils/i18n"
+
+const props = defineProps({
+  open: { type: Boolean, default: false },
+})
+const emit = defineEmits(["close"])
+
+const hosts = useHostsStore()
+const auth = useAuthStore()
+const { pendingUri, consume } = useConnectIntent()
+const { t } = useI18n()
+
+/** Host id we're prompting login for.  When non-null the embedded
+ *  ``LoginPane`` renders below the host list.  Selecting a host for
+ *  login also switches the active host so the LoginPane's request
+ *  targets the right backend (capabilities + login URL are derived
+ *  from ``hosts.activeHost``). */
+const loginForHostId = ref(null)
+
+const visible = computed({
+  get: () => props.open,
+  set: (v) => {
+    if (!v) emit("close")
+  },
+})
+
+const form = ref({ name: "", url: "", token: "", adminToken: "" })
+const errorMessage = ref("")
+const isEditingId = ref(null)
+
+const isFormValid = computed(() => Boolean(form.value.url.trim()))
+
+function resetForm() {
+  form.value = { name: "", url: "", token: "", adminToken: "" }
+  errorMessage.value = ""
+  isEditingId.value = null
+}
+
+function onSubmitForm() {
+  try {
+    errorMessage.value = ""
+    const id = hosts.addHost(form.value)
+    hosts.setActive(id)
+    resetForm()
+    emit("close")
+  } catch (e) {
+    errorMessage.value = e?.message || String(e)
+  }
+}
+
+function onActivate(id) {
+  hosts.setActive(id)
+  emit("close")
+}
+
+function onUseSameOrigin() {
+  hosts.setActive(null)
+  emit("close")
+}
+
+/** Show the "Log in" icon only when the host has multi_user enabled
+ *  per the cached capabilities probe.  Falls back to ``true`` if we
+ *  haven't probed this host yet — the LoginPane re-probes when
+ *  activated, so a stale "show login" decision self-corrects. */
+function canLoginOnHost(host) {
+  if (!host) return false
+  const cached = auth.capabilitiesByHost[host.id]
+  if (!cached) return true
+  return !!cached.multi_user?.enabled
+}
+
+async function onLogin(host) {
+  hosts.setActive(host.id)
+  loginForHostId.value = host.id
+  await auth.fetch()
+}
+
+/** Reveal the inline login pane for the ACTIVE host (same-origin or
+ *  remote).  ``"_self"`` is just a truthy sentinel — LoginPane targets
+ *  ``hosts.activeHost`` (null = same-origin browser/cookie login). */
+function onLoginActive() {
+  loginForHostId.value = hosts.activeHostId || "_self"
+}
+
+async function onLogoutActive() {
+  await auth.logout()
+}
+
+function onLoginSuccess() {
+  loginForHostId.value = null
+  emit("close")
+}
+
+async function onLogout(host) {
+  hosts.setActive(host.id)
+  await auth.logout()
+}
+
+async function onRemove(host) {
+  try {
+    await ElMessageBox.confirm(t("hostPicker.removeConfirm", { name: host.name }), t("hostPicker.removeAction"), {
+      type: "warning",
+      confirmButtonText: t("hostPicker.removeAction"),
+      cancelButtonText: t("common.cancel"),
+    })
+  } catch {
+    return
+  }
+  hosts.removeHost(host.id)
+}
+
+function onEdit(host) {
+  isEditingId.value = host.id
+  form.value = {
+    name: host.name,
+    url: host.url,
+    token: host.token || "",
+    adminToken: host.adminToken || "",
+  }
+  errorMessage.value = ""
+}
+
+function onSaveEdit() {
+  try {
+    errorMessage.value = ""
+    if (!isEditingId.value) return
+    hosts.updateHost(isEditingId.value, {
+      name: form.value.name,
+      token: form.value.token,
+      adminToken: form.value.adminToken,
+    })
+    resetForm()
+  } catch (e) {
+    errorMessage.value = e?.message || String(e)
+  }
+}
+
+function onQrScan(parsed) {
+  // parsed: { url, token, scheme } from QrScanner.parseKtConnect
+  form.value = {
+    name: form.value.name || parsed.url,
+    url: parsed.url,
+    token: parsed.token,
+    adminToken: "",
+  }
+  onSubmitForm()
+}
+
+// Auto-consume a ktconnect:// URI delivered by Android deep-link.
+watch(
+  pendingUri,
+  async (uri) => {
+    if (!uri) return
+    try {
+      const u = new URL(uri)
+      if (u.protocol !== "ktconnect:") throw new Error("not a ktconnect:// URI")
+      const token = u.searchParams.get("token") || ""
+      const scheme = (u.searchParams.get("scheme") || "http").toLowerCase()
+      if (scheme !== "http" && scheme !== "https") {
+        throw new Error(`unsupported scheme ${scheme}`)
+      }
+      const authority = u.host
+      if (!authority) throw new Error("missing host:port")
+      if (!token) throw new Error("missing token")
+      const id = hosts.addHost({
+        name: form.value.name || authority,
+        url: `${scheme}://${authority}`,
+        token,
+      })
+      hosts.setActive(id)
+      ElMessage.success(t("hostPicker.qrFromUri", { host: authority }))
+      consume()
+      emit("close")
+    } catch (e) {
+      errorMessage.value = t("hostPicker.qrFailed", {
+        error: e?.message || String(e),
+      })
+      consume()
+    }
+  },
+  { immediate: true },
+)
+</script>

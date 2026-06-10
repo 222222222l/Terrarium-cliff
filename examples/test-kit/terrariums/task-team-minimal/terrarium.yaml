@@ -1,0 +1,56 @@
+terrarium:
+  name: task-team-minimal
+
+  root:
+    name: root
+    base_config: ../../creatures/root-privileged/
+    system_prompt_file: ./prompts/root.md
+    controller:
+      provider: openai
+      model: "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+      api_key_env: TASK_TEAM_API_KEY
+      base_url: "${TASK_TEAM_BASE_URL:https://openrouter.ai/api/v1}"
+      temperature:
+
+  creatures:
+    - name: coordinator
+      base_config: ../../creatures/coordinator/
+      system_prompt_file: ./prompts/coordinator.md
+      output_log: true
+      output_log_size: 200
+      controller:
+        provider: openai
+        model: "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+        api_key_env: TASK_TEAM_API_KEY
+        base_url: "${TASK_TEAM_BASE_URL:https://openrouter.ai/api/v1}"
+        temperature:
+      output_wiring:
+        - to: worker
+
+    - name: worker
+      base_config: ../../creatures/worker-base/
+      system_prompt_file: ./prompts/worker.md
+      output_log: true
+      output_log_size: 200
+      controller:
+        provider: openai
+        model: "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+        api_key_env: TASK_TEAM_API_KEY
+        base_url: "${TASK_TEAM_BASE_URL:https://openrouter.ai/api/v1}"
+        temperature:
+      output_wiring:
+        - to: critic
+
+    - name: critic
+      base_config: ../../creatures/critic/
+      system_prompt_file: ./prompts/critic.md
+      output_log: true
+      output_log_size: 200
+      controller:
+        provider: openai
+        model: "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+        api_key_env: TASK_TEAM_API_KEY
+        base_url: "${TASK_TEAM_BASE_URL:https://openrouter.ai/api/v1}"
+        temperature:
+      output_wiring:
+        - to: root

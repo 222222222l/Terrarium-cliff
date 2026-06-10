@@ -1,0 +1,29 @@
+version: 1
+
+providers:
+  - name: cli-anything
+    spec_file: providers/cli_anything.yaml
+  - name: opencli
+    spec_file: providers/opencli.yaml
+
+capabilities:
+  - name: local_software_task
+    provider: cli-anything
+  - name: service_cli_task
+    provider: cli-anything
+  - name: browser_cli_task
+    provider: cli-anything
+  - name: browser_authenticated_task
+    provider: opencli
+  - name: browser_public_task
+    provider: opencli
+  - name: desktop_app_task
+    provider: opencli
+  - name: external_cli_passthrough
+    provider: opencli
+
+defaults:
+  provider_order:
+    - cli-anything
+    - opencli
+  token_budget_mode: silent

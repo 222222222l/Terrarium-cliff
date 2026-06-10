@@ -1,0 +1,110 @@
+/temp*/
+env
+.env
+ideas/
+example_output/
+novel_log.txt
+novel_out.txt
+.ruff_cache/
+.claude/
+.kohaku/
+.internal/
+.briefcase/
+.kohaku-docs-build/
+poc/
+.coverage
+.coverage*
+kt-tipo-agent/
+*-old/
+kt-paper/
+
+# Registry hub frontend lives in a dedicated companion repo
+# (Kohaku-Lab/kohaku-registry-hub).  Cloned locally into
+# ./registry-hub/ for convenient side-by-side development with the
+# framework; never committed back into this repo.  See
+# plans/1.5.0-roadmap/07-registry-hub/ for the design + impl plan.
+/registry-hub/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+plans/
+src/kohakuterrarium-frontend/node_modules/
+src/kohakuterrarium/web_dist/
+
+kt-biome/
+kt-template/
+# Sibling-repo working dirs (each is its own git repo managed
+# alongside KT; gitignored so KT's git doesn't try to track them).
+dep/
+# Local exploration / cloned-for-reference repos (not tracked)
+/temp/
+
+# Briefcase bundled-release tarballs.  CI populates this from the
+# release-tree matrix; locally it's filled by
+# ``scripts/prep_local_briefcase.py`` before ``briefcase create``.
+# Either way the contents are build artifacts, not source.
+/bundled-release/
+
+# Mobile-UX audit working tree — Playwright + Pillow renders, MD
+# write-ups, capture/annotate scripts.  Lives in-tree for sharing
+# inside the agent loop but never committed (binary screenshots +
+# rapidly-iterated notes).
+/audit/

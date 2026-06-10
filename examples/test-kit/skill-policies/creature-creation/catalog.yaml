@@ -1,0 +1,49 @@
+version: 1
+group: creature-creation
+description: Package-local selection index for creature-creation skills.
+
+skills:
+  - skill_name: autonomous-cli-builder
+    category: creature-creation
+    provider_scope: cli-anything
+    invocation_mode: direct
+    attach_scope: creature
+    default_attach: false
+    removable: true
+    safe_for_default_bundle: false
+    supported_roles:
+      - root
+      - coordinator
+    fallback_behavior: Creature remains usable without this skill; CLI creation falls back to manual reasoning or other selected skills.
+    when_to_choose: Use when the user explicitly wants a CLI-Anything-first CLI creation path.
+    source_path: examples/test-kit/skills/autonomous-cli-builder/SKILL.md
+
+  - skill_name: opencli-autonomous-builder
+    category: creature-creation
+    provider_scope: opencli
+    invocation_mode: direct
+    attach_scope: creature
+    default_attach: false
+    removable: true
+    safe_for_default_bundle: false
+    supported_roles:
+      - root
+      - coordinator
+    fallback_behavior: Creature remains usable without this skill; OpenCLI route creation is simply unavailable until user adds it back.
+    when_to_choose: Use when the task depends on browser sessions, public adapters, desktop adapters, or OpenCLI-native automation.
+    source_path: examples/test-kit/skills/opencli-autonomous-builder/SKILL.md
+
+  - skill_name: provider-aware-cli-builder
+    category: creature-creation
+    provider_scope: hybrid
+    invocation_mode: routed
+    attach_scope: creature
+    default_attach: false
+    removable: true
+    safe_for_default_bundle: false
+    supported_roles:
+      - root
+      - coordinator
+    fallback_behavior: Creature remains usable without this skill; provider routing must then be chosen manually by the user or by separate provider-specific skills.
+    when_to_choose: Use when provider fit is unclear or the user wants one entry point covering both CLI-Anything and OpenCLI.
+    source_path: examples/test-kit/skills/provider-aware-cli-builder/SKILL.md

@@ -1,0 +1,12 @@
+"""
+{{ description }}
+"""
+
+from kohakuterrarium.modules.output.base import BaseOutputModule
+
+
+class {{ class_name }}(BaseOutputModule):
+    """Output module: {{ name }}."""
+
+    async def write(self, content: str) -> None:
+{{ body | indent(8, True) }}

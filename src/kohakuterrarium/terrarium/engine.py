@@ -1,0 +1,722 @@
+"""Terrarium runtime engine.
+
+The engine hosts every running creature in the process and owns the
+graph-level state (which creatures share a session, which channels
+exist, who listens / sends).  A standalone ``kt run creature.yaml``
+becomes a 1-creature graph; a multi-agent recipe becomes one or more
+larger graphs.  Topology can change at runtime — channels can be
+added or rewired between any pair of creatures, and the engine fans
+the change out to live agents (channel-trigger injection, environment
+union on graph merge, session-store copy on graph split).
+"""
+
+import asyncio
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import kohakuterrarium.terrarium.channel_lifecycle as _lifecycle
+import kohakuterrarium.terrarium.channels as _channels
+import kohakuterrarium.terrarium.recipe as _recipe
+import kohakuterrarium.terrarium.resume as _resume
+import kohakuterrarium.terrarium.root as _root
+import kohakuterrarium.terrarium.topology as _topo
+import kohakuterrarium.terrarium.topology_snapshot as _topo_snap
+import kohakuterrarium.terrarium.wiring as _wiring
+from kohakuterrarium.core.environment import Environment
+from kohakuterrarium.terrarium.creature_host import (
+    Creature,
+    CreatureBuildInput,
+    apply_creature_name,
+    build_creature,
+)
+from kohakuterrarium.terrarium.events import (
+    ConnectionResult,
+    DisconnectionResult,
+    EngineEvent,
+    EventFilter,
+    EventKind,
+    RootAssignment,
+)
+from kohakuterrarium.terrarium.runtime_prompt import RuntimeGraphPrompt
+from kohakuterrarium.terrarium.tools_group import (
+    force_register_basic_tools,
+    force_register_privileged_tools,
+)
+from kohakuterrarium.terrarium.topology import (
+    ChannelInfo,
+    GraphTopology,
+    TopologyDelta,
+    TopologyState,
+)
+from kohakuterrarium.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from kohakuterrarium.session.store import SessionStore
+    from kohakuterrarium.terrarium.config import TerrariumConfig
+
+_logger = get_logger(__name__)
+
+# A few user-facing aliases so callers can refer to creatures and graphs
+# either by handle or by id.  The engine accepts both forms.
+CreatureRef = Creature | str
+GraphRef = GraphTopology | str
+
+
+class Terrarium:
+    """Multi-agent runtime engine.
+
+    Hosts any number of creatures (single agents) and connects them via
+    channels.  A standalone agent is a 1-creature graph; a "terrarium
+    config" is a multi-creature graph.  Topology can change at runtime.
+    See :meth:`from_recipe`, :meth:`resume`, :meth:`with_creature` for
+    the three common construction shapes.
+    """
+
+    # ------------------------------------------------------------------
+    # construction
+    # ------------------------------------------------------------------
+
+    def __init__(
+        self,
+        *,
+        pwd: str | None = None,
+        session_dir: str | None = None,
+    ) -> None:
+        self._pwd = pwd
+        self._session_dir = session_dir
+        self._topology = TopologyState()
+        self._creatures: dict[str, Creature] = {}
+        self._environments: dict[str, Environment] = {}
+        # graph_id -> attached SessionStore.
+        self._session_stores: dict[str, "SessionStore"] = {}
+        self._subscribers: list[_Subscriber] = []
+        self._running = True
+        # Live runtime-graph prompt block — refreshed reactively when the
+        # engine emits topology / wire / parent-link events. Attaches
+        # lazily on the first ``async with`` / ``__aenter__`` so a sync
+        # construction in tests doesn't require an event loop.
+        self._runtime_prompt = RuntimeGraphPrompt(self)
+
+    @classmethod
+    async def from_recipe(
+        cls,
+        recipe: "TerrariumConfig | str",
+        *,
+        pwd: str | None = None,
+    ) -> "Terrarium":
+        """Build a Terrarium from a recipe.  See :meth:`apply_recipe`.
+
+        Example: ``async with await Terrarium.from_recipe("t.yaml") as t``.
+        """
+        engine = cls(pwd=pwd)
+        await engine.apply_recipe(recipe, pwd=pwd)
+        return engine
+
+    @classmethod
+    async def resume(
+        cls,
+        store: "SessionStore | str",
+        *,
+        pwd: str | None = None,
+        llm_override: str | None = None,
+    ) -> "Terrarium":
+        """Build a fresh engine and adopt a saved session into it.
+
+        Example: ``async with await Terrarium.resume("s.kohakutr") as t``.
+        """
+        engine = cls(pwd=pwd)
+        engine._running = True
+        await _resume.resume_into_engine(
+            engine, store, pwd=pwd, llm_override=llm_override
+        )
+        return engine
+
+    async def adopt_session(
+        self,
+        store: "SessionStore | str",
+        *,
+        pwd: str | None = None,
+        llm_override: str | None = None,
+    ) -> str:
+        """Adopt a saved session into this running engine.  Returns ``graph_id``.
+
+        Same body as :meth:`resume` but on an existing engine instance —
+        the HTTP / programmatic hot-resume entry point.
+        """
+        return await _resume.resume_into_engine(
+            self, store, pwd=pwd, llm_override=llm_override
+        )
+
+    @classmethod
+    async def with_creature(
+        cls,
+        config: "CreatureBuildInput | Creature",
+        *,
+        pwd: str | None = None,
+    ) -> "tuple[Terrarium, Creature]":
+        """Construct a Terrarium and add a single creature in one call.
+
+        Returns ``(terrarium, creature)``.  One-liner for solo agents::
+
+            t, alice = await Terrarium.with_creature("alice.yaml")
+        """
+        engine = cls(pwd=pwd)
+        creature = await engine.add_creature(config)
+        return engine, creature
+
+    # ------------------------------------------------------------------
+    # async context manager
+    # ------------------------------------------------------------------
+
+    async def __aenter__(self) -> "Terrarium":
+        self._running = True
+        self._runtime_prompt.attach()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._runtime_prompt.detach()
+        await self.shutdown()
+
+    # ------------------------------------------------------------------
+    # creature CRUD
+    # ------------------------------------------------------------------
+
+    async def add_creature(
+        self,
+        config: "CreatureBuildInput | Creature",
+        *,
+        graph: GraphRef | None = None,
+        creature_id: str | None = None,
+        llm_override: str | None = None,
+        pwd: str | None = None,
+        start: bool = True,
+        is_privileged: bool = False,
+        parent_creature_id: str | None = None,
+        suppress_io: bool = False,
+        name: str | None = None,
+    ) -> Creature:
+        """Add a creature to the engine.
+
+        ``config`` may be a path, ``AgentConfig``, ``CreatureConfig``,
+        or a pre-built ``Creature`` (tests / advanced callers).  With
+        ``graph=None`` a fresh singleton graph is minted.  ``start``
+        toggles auto-start of the underlying agent.
+
+        ``suppress_io`` forces the creature's input module to
+        :class:`NoneInput` — set by Studio / Lab managed-spawn paths so
+        the creature is driven only through its attach WebSocket and
+        never boots its config's own ``input: cli`` loop.
+
+        ``name`` is a spawn-time display-name override (the name the
+        user typed in the Studio "new creature" form).  When set it is
+        applied across the creature + its nested objects, so a creature
+        spawned on a worker carries the user's chosen name — not the
+        config file's own ``name``.
+
+        ``is_privileged`` marks the creature as having access to the
+        group_* tool surface — set by direct user actions (solo
+        ``kt run``, Studio "new creature") and by recipe-root assignment
+        (via :meth:`assign_root`). False for tool-spawned workers.
+        **Elevate-only**: passing ``False`` here on a pre-built
+        :class:`Creature` whose ``is_privileged`` is already ``True``
+        (tests, advanced callers) does not demote it. Callers cannot
+        downgrade privilege through this method.
+
+        ``parent_creature_id`` is also additive: it overwrites only when
+        non-None. None means "leave whatever the pre-built creature
+        already has."
+
+        Example: ``alice = await t.add_creature("alice.yaml")``.
+        """
+        if isinstance(config, Creature):
+            creature = config
+        else:
+            creature = build_creature(
+                config,
+                creature_id=creature_id,
+                pwd=pwd if pwd is not None else self._pwd,
+                llm_override=llm_override,
+                suppress_io=suppress_io,
+            )
+        if creature_id and creature.creature_id != creature_id:
+            creature.creature_id = creature_id
+        if name and name.strip():
+            apply_creature_name(creature, name.strip())
+        if creature.creature_id in self._creatures:
+            raise ValueError(f"creature_id {creature.creature_id!r} already exists")
+
+        graph_id = self._resolve_graph_id(graph) if graph is not None else None
+        gid = _topo.add_creature(
+            self._topology, creature.creature_id, graph_id=graph_id
+        )
+        creature.graph_id = gid
+        # ``is_privileged`` and ``parent_creature_id`` are additive. A
+        # pre-built creature (tests, advanced callers) may already carry
+        # these flags; we never demote them via add_creature.
+        if is_privileged:
+            creature.is_privileged = True
+        if parent_creature_id is not None:
+            creature.parent_creature_id = parent_creature_id
+        # Allocate or reuse the graph's environment, then bind the
+        # creature's agent + executor to it so ToolContext is correct
+        # even when joining a non-empty graph.
+        if gid not in self._environments:
+            self._environments[gid] = Environment(env_id=f"env_{gid}")
+        graph_env = self._environments[gid]
+        _channels.bind_creature_to_environment(creature, graph_env)
+        _channels.register_engine_handle(graph_env, self)
+        self._creatures[creature.creature_id] = creature
+        _wiring.install_output_wiring_resolver(self)
+
+        # Every engine-backed creature gets the basic comm tools
+        # (``send_channel`` / ``group_send``); only privileged creatures
+        # additionally get the graph-mutating ``group_*`` surface.
+        force_register_basic_tools(creature.agent)
+        if creature.is_privileged:
+            force_register_privileged_tools(creature.agent)
+
+        if start:
+            await creature.start()
+        self._emit(
+            EngineEvent(
+                kind=EventKind.CREATURE_STARTED,
+                creature_id=creature.creature_id,
+                graph_id=gid,
+            )
+        )
+        return creature
+
+    async def remove_creature(self, creature: CreatureRef) -> None:
+        """Stop and remove a creature.  May split the graph it lived in.
+
+        Raises ``KeyError`` when the creature is not in the engine.
+        """
+        cid = self._resolve_creature_id(creature)
+        c = self._creatures.get(cid)
+        if c is None:
+            raise KeyError(f"creature {cid!r} not in engine")
+        old_gid = c.graph_id
+        if c.is_running:
+            await c.stop()
+        delta = _topo.remove_creature(self._topology, cid)
+        self._creatures.pop(cid, None)
+        _wiring.install_output_wiring_resolver(self)
+        # Drop the environment if its graph went away.
+        if old_gid not in self._topology.graphs:
+            self._environments.pop(old_gid, None)
+        self._emit(
+            EngineEvent(
+                kind=EventKind.CREATURE_STOPPED,
+                creature_id=cid,
+                graph_id=old_gid,
+            )
+        )
+        # Removing a creature can split the graph (when it was the only
+        # bridge between two clusters). Run the shared bookkeeping so
+        # new envs are allocated, surviving creatures are repointed at
+        # their new graph_id, and session stores are coordinated.
+        # ``apply_split_bookkeeping`` is a no-op for non-split deltas.
+        _lifecycle.apply_split_bookkeeping(self, delta)
+
+    def get_creature(self, creature_id: str) -> Creature:
+        """Return the creature with the given id.  Raises ``KeyError``."""
+        c = self._creatures.get(creature_id)
+        if c is None:
+            raise KeyError(f"creature {creature_id!r} not in engine")
+        return c
+
+    def list_creatures(self) -> list[Creature]:
+        """All currently-hosted creatures."""
+        return list(self._creatures.values())
+
+    # ------------------------------------------------------------------
+    # pythonic accessors
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, creature_id: str) -> Creature:
+        return self.get_creature(creature_id)
+
+    def __contains__(self, creature_id: str) -> bool:
+        return creature_id in self._creatures
+
+    def __iter__(self) -> Iterator[Creature]:
+        return iter(self.list_creatures())
+
+    def __len__(self) -> int:
+        return len(self._creatures)
+
+    # ------------------------------------------------------------------
+    # channel CRUD
+    # ------------------------------------------------------------------
+
+    async def add_channel(
+        self,
+        graph: GraphRef,
+        name: str,
+        description: str = "",
+    ) -> ChannelInfo:
+        """Declare a channel inside a graph.
+
+        Channel names are graph-unique. Graph topology channels are
+        always broadcast — every listener receives every send. After
+        declaration the channel exists in the graph's
+        :class:`Environment.shared_channels` registry but no creature
+        listens to or sends on it yet — use :meth:`connect` (or set
+        listen/send via topology helpers) to wire creatures up.
+        """
+        gid = self._resolve_graph_id(graph)
+        info = _topo.add_channel(
+            self._topology,
+            gid,
+            name,
+            description=description,
+        )
+        env = self._environments[gid]
+        _channels.register_channel_in_environment(
+            env.shared_channels, info, engine=self, graph_id=gid
+        )
+        _topo_snap.snapshot(self, gid)
+        return info
+
+    async def remove_channel(self, graph: GraphRef, name: str) -> TopologyDelta:
+        """Remove a channel from a graph.
+
+        Tears down listen triggers, drops the channel from the live
+        registry and topology, and may split the graph if the channel
+        was the only connectivity bridge between two components. Body
+        in ``terrarium.channels.remove_channel_from_graph``.
+        """
+        gid = self._resolve_graph_id(graph)
+        delta = await _lifecycle.remove_channel_from_graph(self, gid, name)
+        # remove_channel may auto-split; snapshot every store-attached
+        # graph so each one reflects its post-removal topology.
+        _topo_snap.snapshot_all(self)
+        return delta
+
+    async def connect(
+        self,
+        sender: CreatureRef,
+        receiver: CreatureRef,
+        *,
+        channel: str | None = None,
+    ) -> "ConnectionResult":
+        """Wire a sender → receiver link via a channel.
+
+        When the two creatures live in different graphs, the graphs
+        merge — environments union, channels are pooled, and any
+        attached session stores are merged into a single store on the
+        surviving graph.
+
+        Body lives in ``terrarium.channels.connect_creatures``.
+        """
+        result = await _channels.connect_creatures(
+            self, sender, receiver, channel=channel
+        )
+        # connect may merge graphs; snapshot every store-attached graph
+        # so each one reflects the post-connect topology.
+        _topo_snap.snapshot_all(self)
+        return result
+
+    async def disconnect(
+        self,
+        sender: CreatureRef,
+        receiver: CreatureRef,
+        *,
+        channel: str | None = None,
+    ) -> "DisconnectionResult":
+        """Drop a sender → receiver link.  May split a graph.
+
+        When ``channel`` is None, every sender→receiver edge is
+        unwired.  Body lives in
+        ``terrarium.channel_lifecycle.disconnect_creatures``.
+        """
+        result = await _lifecycle.disconnect_creatures(
+            self, sender, receiver, channel=channel
+        )
+        # ``DisconnectionResult`` doesn't carry the affected gids; the
+        # mutation may also split a graph into multiple. Snapshot every
+        # store-attached graph so each one's saved topology reflects
+        # the post-disconnect wires.
+        _topo_snap.snapshot_all(self)
+        return result
+
+    # ------------------------------------------------------------------
+    # output wiring
+    # ------------------------------------------------------------------
+
+    async def wire_output(self, creature: CreatureRef, target) -> str:
+        """Add a runtime ``config.output_wiring`` edge; return its id."""
+        c = self._creature(creature)
+        edge_id = _wiring.add_output_edge(c.agent, target)
+        self._emit(
+            EngineEvent(
+                kind=EventKind.OUTPUT_WIRE_ADDED,
+                creature_id=c.creature_id,
+                graph_id=c.graph_id,
+                payload={"edge_id": edge_id},
+            )
+        )
+        return edge_id
+
+    async def unwire_output(self, creature: CreatureRef, edge_id: str) -> bool:
+        """Remove a runtime ``config.output_wiring`` edge by id."""
+        c = self._creature(creature)
+        removed = _wiring.remove_output_edge(c.agent, edge_id)
+        if removed:
+            self._emit(
+                EngineEvent(
+                    kind=EventKind.OUTPUT_WIRE_REMOVED,
+                    creature_id=c.creature_id,
+                    graph_id=c.graph_id,
+                    payload={"edge_id": edge_id},
+                )
+            )
+        return removed
+
+    def list_output_wiring(self, creature: CreatureRef) -> list[dict]:
+        """List output-wiring edges on a creature."""
+        c = self._creature(creature)
+        return _wiring.list_output_edges(c.agent)
+
+    async def wire_output_sink(self, creature: CreatureRef, sink) -> str:
+        """Attach a secondary output sink to a creature."""
+        c = self._creature(creature)
+        return _wiring.add_secondary_sink(c.agent, sink)
+
+    async def unwire_output_sink(self, creature: CreatureRef, sink_id: str) -> bool:
+        """Remove a secondary output sink."""
+        c = self._creature(creature)
+        return _wiring.remove_secondary_sink(c.agent, sink_id)
+
+    # ------------------------------------------------------------------
+    # root assignment — graph-level helper
+    # ------------------------------------------------------------------
+
+    async def assign_root(
+        self,
+        creature: CreatureRef,
+        *,
+        report_channel: str = "report_to_root",
+    ) -> RootAssignment:
+        """Designate ``creature`` as the privileged root of its graph.
+
+        Group-scoped helper — operates only on the creature's current
+        graph. Side effects:
+
+        - Declares ``report_channel`` if missing.
+        - Wires the root as listener on every channel in the graph.
+        - Wires every other creature as sender on ``report_channel``.
+        - Sets ``creature.is_privileged = True`` (elevate-only — already
+          privileged creatures stay privileged).
+        - Force-registers the ``group_*`` tools on the root agent.
+
+        Body lives in :func:`terrarium.root.assign_root_to`.
+        """
+        return await _root.assign_root_to(self, creature, report_channel=report_channel)
+
+    # ------------------------------------------------------------------
+    # graphs
+    # ------------------------------------------------------------------
+
+    def get_graph(self, graph_id: str) -> GraphTopology:
+        """Return the :class:`GraphTopology` for ``graph_id``."""
+        g = self._topology.graphs.get(graph_id)
+        if g is None:
+            raise KeyError(f"graph {graph_id!r} does not exist")
+        return g
+
+    def list_graphs(self) -> list[GraphTopology]:
+        """All currently-active graphs."""
+        return list(self._topology.graphs.values())
+
+    # ------------------------------------------------------------------
+    # recipe
+    # ------------------------------------------------------------------
+
+    async def apply_recipe(
+        self,
+        recipe,
+        *,
+        graph: GraphRef | None = None,
+        pwd: str | None = None,
+        llm_override: str | None = None,
+        creature_builder=None,
+    ) -> GraphTopology:
+        """Apply a terrarium recipe into this engine."""
+        kwargs = {
+            "graph": graph,
+            "pwd": pwd if pwd is not None else self._pwd,
+            "creature_builder": creature_builder,
+        }
+        if llm_override is not None:
+            kwargs["llm_override"] = llm_override
+        return await _recipe.apply_recipe(self, recipe, **kwargs)
+
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self, creature: CreatureRef) -> None:
+        """Start a (previously-added) creature whose lifecycle was
+        deferred via ``add_creature(..., start=False)``."""
+        c = self._creature(creature)
+        await c.start()
+
+    async def stop(self, creature: CreatureRef) -> None:
+        """Stop a running creature without removing it from the graph."""
+        c = self._creature(creature)
+        if c.is_running:
+            await c.stop()
+
+    async def stop_graph(self, graph: GraphRef) -> None:
+        """Stop every creature in a graph (without removing them)."""
+        gid = self._resolve_graph_id(graph)
+        g = self._topology.graphs.get(gid)
+        if g is None:
+            return
+        for cid in list(g.creature_ids):
+            c = self._creatures.get(cid)
+            if c is not None and c.is_running:
+                await c.stop()
+
+    async def shutdown(self) -> None:
+        """Stop every creature in every graph.  Safe to call repeatedly.
+
+        Called automatically by ``__aexit__``.
+        """
+        if not self._creatures and not self._running:
+            return
+        for c in list(self._creatures.values()):
+            if c.is_running:
+                try:
+                    await c.stop()
+                except Exception as e:  # pragma: no cover - defensive
+                    _shutdown_log_warning(c.creature_id, str(e))
+        self._running = False
+
+    # ------------------------------------------------------------------
+    # observability
+    # ------------------------------------------------------------------
+
+    async def subscribe(
+        self, filter: EventFilter | None = None
+    ) -> AsyncIterator[EngineEvent]:
+        """Async-iterate engine events matching ``filter``.
+
+        Each call returns a fresh async iterator with its own queue —
+        events emitted before the iterator is awaited are not buffered.
+        Cancelling / breaking out of the iterator de-registers the
+        subscriber automatically.
+
+        Example::
+
+            async with Terrarium() as t:
+                async for ev in t.subscribe():
+                    print(ev.kind, ev.creature_id)
+        """
+        sub = _Subscriber(filter=filter)
+        self._subscribers.append(sub)
+        try:
+            while True:
+                ev = await sub.queue.get()
+                if ev is None:
+                    return
+                yield ev
+        finally:
+            try:
+                self._subscribers.remove(sub)
+            except ValueError:
+                pass
+
+    def status(self, creature: CreatureRef | None = None) -> dict:
+        """Status dict for one creature, or a roll-up if ``None``.
+
+        The single-creature shape mirrors :meth:`Creature.get_status` —
+        the same shape every API / WS endpoint reads. The roll-up
+        shape (no argument) lists every creature plus graph membership.
+        """
+        if creature is not None:
+            return self._creature(creature).get_status()
+        return {
+            "running": self._running,
+            "creatures": {cid: c.get_status() for cid, c in self._creatures.items()},
+            "graphs": {
+                gid: {
+                    "creature_ids": sorted(g.creature_ids),
+                    "channels": sorted(g.channels),
+                }
+                for gid, g in self._topology.graphs.items()
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # session attach
+    # ------------------------------------------------------------------
+
+    async def attach_session(self, graph: GraphRef, store: "SessionStore") -> None:
+        """Attach a :class:`SessionStore` to a graph.  See
+        ``terrarium.session_coord`` for merge/split details."""
+        gid = self._resolve_graph_id(graph)
+        self._session_stores[gid] = store
+        g = self._topology.graphs.get(gid)
+        if g is None:
+            return
+        # Retroactively wire channel persistence on every channel that
+        # was registered before the store was attached — without this,
+        # channels created at engine.add_channel time before
+        # attach_session lose every send to the void.
+        env = self._environments.get(gid)
+        if env is not None:
+            for channel in env.shared_channels._channels.values():
+                _channels._ensure_channel_persistence(channel, self, gid)
+        for cid in g.creature_ids:
+            c = self._creatures.get(cid)
+            if c is None:
+                continue
+            if hasattr(c.agent, "attach_session_store"):
+                c.agent.attach_session_store(store)
+            elif hasattr(c.agent, "session_store"):
+                c.agent.session_store = store
+
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_creature_id(self, ref: CreatureRef) -> str:
+        if isinstance(ref, Creature):
+            return ref.creature_id
+        return ref
+
+    def _resolve_graph_id(self, ref: GraphRef) -> str:
+        if isinstance(ref, GraphTopology):
+            return ref.graph_id
+        return ref
+
+    def _creature(self, ref: CreatureRef) -> Creature:
+        return self.get_creature(self._resolve_creature_id(ref))
+
+    def _emit(self, event: EngineEvent) -> None:
+        """Fan out an event to every subscriber whose filter matches."""
+        for sub in list(self._subscribers):
+            if sub.filter is None or sub.filter.matches(event):
+                try:
+                    sub.queue.put_nowait(event)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
+
+@dataclass
+class _Subscriber:
+    """Pub-sub bookkeeping for :meth:`Terrarium.subscribe`."""
+
+    filter: EventFilter | None = None
+    queue: "asyncio.Queue[EngineEvent | None]" = field(default_factory=asyncio.Queue)
+
+
+def _shutdown_log_warning(creature_id: str, error: str) -> None:
+    _logger.warning(
+        "creature stop failed during shutdown",
+        creature_id=creature_id,
+        error=error,
+    )

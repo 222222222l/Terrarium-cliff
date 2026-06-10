@@ -1,0 +1,569 @@
+"""Creature wrapper for the Terrarium engine.
+
+Every running agent is a :class:`Creature`; a standalone ``kt run`` is
+a creature in a 1-creature graph, a recipe is several creatures in
+one graph wired by channels.
+
+Includes the wrapper plus a ``build_creature`` factory that handles
+both ``AgentConfig`` (file path or object) and ``CreatureConfig``
+(in-recipe shape) inputs.
+"""
+
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from kohakuterrarium.builtins.inputs.none import NoneInput
+from kohakuterrarium.core.agent import Agent
+from kohakuterrarium.core.config import AgentConfig, build_agent_config
+from kohakuterrarium.core.environment import Environment
+from kohakuterrarium.llm.profiles import _login_provider_for
+from kohakuterrarium.terrarium.config import CreatureConfig
+from kohakuterrarium.terrarium.output_log import LogEntry, OutputLogCapture
+from kohakuterrarium.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Creature — the engine's per-running-agent wrapper
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Creature:
+    """A running agent inside the Terrarium engine.
+
+    A solo `kt run` creates one of these in a 1-creature graph; a
+    terrarium recipe creates several in one graph wired by channels.
+    Every per-creature endpoint (HTTP, WS, CLI, tools) reads from this
+    one type.
+
+    Programmatic usage::
+
+        async with Terrarium() as t:
+            alice = await t.add_creature("creatures/alice.yaml")
+            async for chunk in alice.chat("hello"):
+                print(chunk, end="", flush=True)
+    """
+
+    creature_id: str
+    name: str
+    agent: Agent
+    graph_id: str = ""
+    config: Any = None
+    listen_channels: list[str] = field(default_factory=list)
+    send_channels: list[str] = field(default_factory=list)
+    output_log: OutputLogCapture | None = None
+    # Privilege is elevate-only: set once (at creation or via
+    # ``Terrarium.assign_root``) and never demoted thereafter. True
+    # for creatures created by direct user action (solo ``kt run``,
+    # Studio "new creature") and recipe roots elevated by
+    # ``assign_root``. False for recipe non-root creatures and for
+    # workers spawned via ``group_add_node``.
+    is_privileged: bool = False
+    # Creature_id of the privileged creature that spawned this one via
+    # ``group_add_node``. None for user-created or recipe-created
+    # creatures. Used by ``group_status`` to surface workers that the
+    # caller spawned but hasn't wired into a graph yet.
+    parent_creature_id: str | None = None
+
+    # Internal queue for chat() output streaming.  Created lazily so
+    # the dataclass stays trivially constructible.
+    _output_queue: "asyncio.Queue[str | None] | None" = None
+    _running: bool = False
+    _chat_handler_installed: bool = False
+    # Background task driving the agent's configured input module.
+    # Spawned in ``start`` and reaped in ``stop`` — see ``start`` for
+    # why this lives at the creature layer rather than inside Agent.
+    _input_task: "asyncio.Task[None] | None" = None
+    # Has ``start()`` ever been called? Used to distinguish "not yet
+    # started" from "stopped" in :attr:`status`. ``_running`` alone
+    # cannot tell them apart because both states leave it ``False``.
+    _ever_started: bool = False
+    # If the input-driver task exits with an exception, the exception
+    # is captured here so :attr:`status` can report ``"error"`` until
+    # the next ``start()`` clears it.
+    _input_loop_error: BaseException | None = None
+
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start the underlying agent.  Idempotent.
+
+        Also spawns ``Agent._drive_input`` as a background task so the
+        configured input module's polling loop is driven by the engine
+        path (the standalone ``Agent.run`` path drives it directly).
+        Without this, headless agents (Discord bot, webhook listener,
+        custom polling input) never consume their queues — their
+        ``get_input`` is the only place ``_process_event`` is reached
+        for non-trigger, non-channel input. Cheap for ``NoneInput``-
+        backed creatures: ``get_input`` blocks on the stop event.
+
+        The ``_drive_input`` lookup is tolerant — agent-likes used in
+        tests or specialized hosts that don't expose this hook simply
+        skip the spawn (they're presumed to drive their own loop).
+        """
+        if self._running:
+            return
+        self._ensure_chat_pipe()
+        await self.agent.start()
+        self._running = True
+        self._ever_started = True
+        self._input_loop_error = None
+        drive_input = getattr(self.agent, "_drive_input", None)
+        if callable(drive_input):
+            self._input_task = asyncio.create_task(
+                drive_input(),
+                name=f"creature-input-{self.creature_id}",
+            )
+            self._input_task.add_done_callback(self._on_input_task_done)
+        logger.info(
+            "Creature started", creature_id=self.creature_id, creature_name=self.name
+        )
+
+    def _on_input_task_done(self, task: "asyncio.Task[None]") -> None:
+        """Mark the creature stopped once its input loop exits.
+
+        The loop ends naturally when the input module signals
+        ``exit_requested``, when ``Agent.stop`` flips ``_running``, or
+        when an unexpected exception escapes. Flipping ``_running``
+        here lets external lifecycle drivers (``kt run`` sleep loop,
+        engine ``__aexit__``) notice and proceed to ``stop``.
+        """
+        if task.cancelled():
+            self._running = False
+            return
+        exc = task.exception()
+        if exc is not None and not isinstance(exc, asyncio.CancelledError):
+            logger.error(
+                "Creature input loop exited with error",
+                creature_id=self.creature_id,
+                creature_name=self.name,
+                error=str(exc),
+            )
+            self._input_loop_error = exc
+        self._running = False
+
+    async def stop(self) -> None:
+        """Stop the underlying agent and close the chat pipe."""
+        if not self._running and self._input_task is None:
+            return
+        self._running = False
+        if self._output_queue is not None:
+            self._output_queue.put_nowait(None)
+        # Stopping the agent flips ``Agent._running`` and stops the
+        # input module, which unblocks ``get_input`` and lets the
+        # background loop exit on its own.
+        await self.agent.stop()
+        await self._reap_input_task()
+        logger.info(
+            "Creature stopped", creature_id=self.creature_id, creature_name=self.name
+        )
+
+    async def _reap_input_task(self) -> None:
+        """Wait for the input-driver task to exit, cancelling on timeout."""
+        task = self._input_task
+        if task is None:
+            return
+        self._input_task = None
+        if task.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning(
+                    "input task cancel ended with exception",
+                    creature_id=self.creature_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(
+                "input task raised on stop",
+                creature_id=self.creature_id,
+                error=str(e),
+                exc_info=True,
+            )
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and self.agent.is_running
+
+    @property
+    def status(self) -> str:
+        """Lifecycle status — what the creature is doing right now.
+
+        Replacement for the legacy ``running: bool`` view used by
+        ``group_status``. ``running`` collapsed several distinct states
+        (never-started, mid-turn, idle-waiting, stopped, crashed) into a
+        single boolean that flipped to ``False`` whenever the input
+        loop exited, even on clean stop — so a privileged caller could
+        not tell whether a worker was idle, busy, or dead.
+
+        Values:
+
+        - ``"not_started"``: ``start()`` has never completed.
+        - ``"error"``: the input loop exited with an exception that
+          was not a normal cancel. Cleared on the next ``start()``.
+        - ``"busy"``: a controller turn is in flight (the agent has a
+          live ``_processing_task``).
+        - ``"idle"``: the agent is alive and waiting for input / a
+          trigger / a channel message.
+        - ``"stopped"``: ``stop()`` was called or the input loop
+          finished naturally; the agent is no longer servicing events.
+        """
+        if not self._ever_started:
+            return "not_started"
+        if self._input_loop_error is not None:
+            return "error"
+        if not self.agent.is_running:
+            return "stopped"
+        proc = getattr(self.agent, "_processing_task", None)
+        if proc is not None and not proc.done():
+            return "busy"
+        return "idle"
+
+    # ------------------------------------------------------------------
+    # chat — streaming inject_input + output drain
+    # ------------------------------------------------------------------
+
+    async def inject_input(
+        self,
+        message: str | list[dict],
+        *,
+        source: str = "chat",
+    ) -> None:
+        """Push input into the agent without consuming output."""
+        await self.agent.inject_input(message, source=source)
+
+    async def chat(self, message: str | list[dict]) -> AsyncIterator[str]:
+        """Inject ``message`` and stream the agent's text response.
+
+        Yields chunks until the agent finishes processing the input.
+        Used by HTTP / WS chat endpoints and by tests.
+        """
+        self._ensure_chat_pipe()
+        q = self._output_queue
+        assert q is not None
+        # Drop any stale chunks from before this turn.
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        inject_task = asyncio.create_task(
+            self.agent.inject_input(message, source="chat")
+        )
+        while not inject_task.done():
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            if chunk is None:
+                break
+            yield chunk
+        # Drain anything that landed after the inject completed.
+        while not q.empty():
+            try:
+                chunk = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if chunk is None:
+                break
+            yield chunk
+        await inject_task
+
+    def _ensure_chat_pipe(self) -> None:
+        """Lazily wire the agent's output handler to our queue."""
+        if self._output_queue is None:
+            self._output_queue = asyncio.Queue()
+        if not self._chat_handler_installed:
+            self.agent.set_output_handler(self._on_output_chunk)
+            self._chat_handler_installed = True
+
+    def _on_output_chunk(self, text: str) -> None:
+        if self._output_queue is None:
+            return
+        self._output_queue.put_nowait(text)
+
+    # ------------------------------------------------------------------
+    # status — preserves the dict shape today's frontend reads
+    # ------------------------------------------------------------------
+
+    def get_status(self) -> dict:
+        """Return a status dict for HTTP / WS / TUI consumers.
+
+        Every field the frontend reads is included — model,
+        max_context, compact_threshold, provider, session_id, tools,
+        subagents, pwd, plus ``is_privileged`` /
+        ``parent_creature_id`` for the group-tools view.
+        """
+        agent = self.agent
+        model = (
+            getattr(agent.llm, "model", "")
+            or getattr(getattr(agent.llm, "config", None), "model", "")
+            or agent.config.model
+        )
+        llm_identifier = ""
+        get_ident = getattr(agent, "llm_identifier", None)
+        if callable(get_ident):
+            try:
+                llm_identifier = get_ident() or ""
+            except Exception as e:
+                logger.warning(
+                    "llm_identifier resolve failed", error=str(e), exc_info=True
+                )
+        max_context = getattr(agent.llm, "_profile_max_context", 0)
+        compact_threshold = 0
+        if agent.compact_manager and max_context:
+            compact_threshold = int(
+                max_context * agent.compact_manager.config.threshold
+            )
+
+        profile_data: dict[str, str] = {"provider": getattr(agent.llm, "provider", "")}
+        api_key_env = getattr(agent.llm, "api_key_env", "")
+        if api_key_env:
+            profile_data["api_key_env"] = api_key_env
+        base_url = getattr(agent.llm, "base_url", "")
+        if base_url:
+            profile_data["base_url"] = base_url
+        provider = _login_provider_for(profile_data)
+
+        session_id = ""
+        if agent.session_store:
+            try:
+                meta = agent.session_store.load_meta()
+                session_id = meta.get("session_id", "")
+            except Exception as e:
+                logger.warning(
+                    "Failed to load session meta",
+                    error=str(e),
+                    exc_info=True,
+                )
+
+        pwd = ""
+        if hasattr(agent, "executor") and agent.executor:
+            pwd = str(agent.executor._working_dir)
+
+        return {
+            "agent_id": self.creature_id,
+            "creature_id": self.creature_id,
+            "graph_id": self.graph_id,
+            "name": self.name,
+            "model": model,
+            "llm_name": llm_identifier,
+            "provider": provider,
+            "session_id": session_id,
+            "max_context": max_context,
+            "compact_threshold": compact_threshold,
+            "running": self.is_running,
+            "is_processing": bool(getattr(agent, "_processing_task", None)),
+            "tools": agent.tools,
+            "subagents": agent.subagents,
+            "pwd": pwd,
+            "listen_channels": list(self.listen_channels),
+            "send_channels": list(self.send_channels),
+            "is_privileged": self.is_privileged,
+            "parent_creature_id": self.parent_creature_id,
+        }
+
+    # ------------------------------------------------------------------
+    # output log helpers
+    # ------------------------------------------------------------------
+
+    def get_log_entries(self, last_n: int = 20) -> list[LogEntry]:
+        if self.output_log:
+            return self.output_log.get_entries(last_n=last_n)
+        return []
+
+    def get_log_entries_since(
+        self,
+        sequence: int,
+        *,
+        entry_type: str | None = None,
+    ) -> list[LogEntry]:
+        if self.output_log:
+            return self.output_log.get_entries_since(sequence, entry_type=entry_type)
+        return []
+
+    def get_log_text(self, last_n: int = 10) -> str:
+        if self.output_log:
+            return self.output_log.get_text(last_n=last_n)
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# build_creature — accepts the three input shapes the engine sees
+# ---------------------------------------------------------------------------
+
+
+CreatureBuildInput = AgentConfig | CreatureConfig | str | Path
+
+
+def apply_creature_name(creature: "Creature", name: str) -> None:
+    """Push a display-name change onto every nested object that caches it.
+
+    Setting ``creature.name`` alone is not enough: the executor (and its
+    ToolContexts) keep emitting channel messages under the original
+    config name, the trigger manager logs with the old name, the compact
+    manager too. ``engine.add_creature`` uses this to apply a spawn-time
+    ``name`` override consistently; ``studio.sessions.lifecycle`` calls it
+    for post-spawn renames.
+    """
+    creature.name = name
+    agent = getattr(creature, "agent", None)
+    if agent is None:
+        if getattr(creature, "config", None) is not None:
+            creature.config.name = name
+        return
+    if getattr(agent, "config", None) is not None:
+        agent.config.name = name
+    if getattr(creature, "config", None) is not None:
+        creature.config.name = name
+    executor = getattr(agent, "executor", None)
+    if executor is not None and hasattr(executor, "_agent_name"):
+        executor._agent_name = name
+    trigger_manager = getattr(agent, "trigger_manager", None)
+    if trigger_manager is not None and hasattr(trigger_manager, "_agent_name"):
+        trigger_manager._agent_name = name
+    compact_manager = getattr(agent, "compact_manager", None)
+    if compact_manager is not None and hasattr(compact_manager, "_agent_name"):
+        compact_manager._agent_name = name
+
+
+def build_creature(
+    config: CreatureBuildInput,
+    *,
+    creature_id: str | None = None,
+    graph_id: str = "",
+    pwd: str | None = None,
+    llm_override: str | None = None,
+    environment: Environment | None = None,
+    suppress_io: bool = False,
+) -> Creature:
+    """Build a :class:`Creature` from any of the supported config shapes.
+
+    Covers the no-channel path (solo creature, terrarium environment
+    defaulted).  Channel injection happens later when the creature is
+    connected via the engine's ``connect`` API.
+
+    Accepted ``config`` types:
+
+    - ``str`` / ``Path`` — path to a creature config file.  Loaded via
+      ``Agent.from_path``.
+    - ``AgentConfig`` — already-loaded standalone config.  Wrapped via
+      ``Agent(config, ...)``.
+    - ``CreatureConfig`` — in-recipe creature dict.  Loaded via
+      ``build_agent_config(config_data, base_dir)`` then ``Agent(...)``.
+
+    ``suppress_io`` forces the agent's input module to :class:`NoneInput`
+    regardless of what the config declares.  A creature managed by the
+    Studio / Lab layer is driven entirely through the attach WebSocket —
+    it must NEVER boot its config's own ``input: cli`` loop, which on a
+    worker process (a foreground ``kt lab-client``) would hijack the
+    terminal's stdin.  Only the standalone ``kt run`` path leaves
+    ``suppress_io=False`` so the config's IO actually runs.
+    """
+    _io_override = NoneInput() if suppress_io else None
+    if isinstance(config, (str, Path)):
+        agent = Agent.from_path(
+            str(config),
+            input_module=_io_override,
+            session=(
+                environment.get_session(creature_id or Path(config).stem)
+                if environment is not None
+                else None
+            ),
+            environment=environment,
+            llm_override=llm_override,
+            pwd=pwd,
+        )
+        cid = creature_id or _safe_creature_id(agent.config.name)
+        return Creature(
+            creature_id=cid,
+            name=agent.config.name,
+            agent=agent,
+            graph_id=graph_id,
+            config=agent.config,
+        )
+
+    if isinstance(config, AgentConfig):
+        session = (
+            environment.get_session(creature_id or config.name) if environment else None
+        )
+        agent = Agent(
+            config,
+            input_module=_io_override,
+            session=session,
+            environment=environment,
+            llm_override=llm_override,
+            pwd=pwd,
+        )
+        cid = creature_id or _safe_creature_id(config.name)
+        return Creature(
+            creature_id=cid,
+            name=config.name,
+            agent=agent,
+            graph_id=graph_id,
+            config=config,
+        )
+
+    if isinstance(config, CreatureConfig):
+        agent_config = build_agent_config(config.config_data, config.base_dir)
+        # CreatureConfig (in-recipe / hot-plug) is always engine-managed
+        # and channel-driven — its IO is suppressed unconditionally.
+        agent = Agent(
+            agent_config,
+            input_module=NoneInput(),
+            session=environment.get_session(config.name) if environment else None,
+            environment=environment,
+            llm_override=llm_override,
+            pwd=pwd,
+        )
+        output_log = None
+        if config.output_log:
+            capture = OutputLogCapture(
+                agent.output_router.default_output,
+                max_entries=config.output_log_size,
+            )
+            agent.output_router.default_output = capture
+            output_log = capture
+        cid = creature_id or _safe_creature_id(config.name)
+        return Creature(
+            creature_id=cid,
+            name=config.name,
+            agent=agent,
+            graph_id=graph_id,
+            config=config,
+            listen_channels=list(config.listen_channels),
+            send_channels=list(config.send_channels),
+            output_log=output_log,
+        )
+
+    raise TypeError(
+        f"build_creature: unsupported config type {type(config).__name__!r}"
+    )
+
+
+def _safe_creature_id(name: str) -> str:
+    """Mint a unique creature id from a config name.
+
+    Names from a recipe are usually meaningful and unique within the
+    recipe, but the engine namespace is process-wide — append a short
+    random suffix so two recipes with the same creature name don't
+    collide.
+    """
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)
+    return f"{cleaned or 'creature'}_{uuid4().hex[:8]}"

@@ -1,0 +1,540 @@
+"""Single IO attach — engine-backed bidirectional chat.
+
+Replaces the legacy ``ws/agents.py``, ``ws/chat.py:ws_terrarium``,
+``ws/chat.py:ws_creature``, plus
+``serving/agent_session.py:StreamOutput`` and the helper trio
+``_attach_terrarium_outputs / _register_channel_callbacks /
+_send_channel_history`` in ``ws/chat.py``.
+
+The new attach mounts onto a creature via ``engine.get_creature(cid)``
+and translates the engine's ``OutputModule`` events to the WS frame
+schema the frontend already speaks.  When the creature lives in a
+multi-creature graph, the same WS connection also surfaces shared-
+channel messages and history (the legacy "terrarium WS" behaviour),
+so the frontend chat panel works the same in both 1- and N-creature
+sessions.
+"""
+
+import asyncio
+import time
+from typing import Any
+
+from fastapi import WebSocket
+
+from kohakuterrarium.laboratory.ws_proxy import proxy_ws_to_lab
+from kohakuterrarium.llm.message import (
+    content_parts_to_dicts,
+    normalize_content_parts,
+)
+from kohakuterrarium.modules.output.event import UIReply
+from kohakuterrarium.studio._runtime import host_engine_or_none
+from kohakuterrarium.studio.attach._event_stream import StreamOutput, get_event_log
+from kohakuterrarium.studio.attach.io_cluster import attach_io_cluster
+from kohakuterrarium.studio.sessions.cluster_fold import cluster_groups
+from kohakuterrarium.studio.sessions.lifecycle import find_creature
+from kohakuterrarium.terrarium import TerrariumService
+from kohakuterrarium.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _normalize_input_content(data: dict[str, Any]) -> str | list[dict[str, Any]]:
+    """Normalize incoming WS input payload."""
+    content = data.get("content")
+    if isinstance(content, list):
+        parts = normalize_content_parts(content) or []
+        return content_parts_to_dicts(parts)
+    if isinstance(content, str):
+        return content
+    message = data.get("message", "")
+    return message if isinstance(message, str) else ""
+
+
+def _handle_ui_reply(
+    data: dict[str, Any],
+    agent: Any,
+    ws: WebSocket,
+    queue: asyncio.Queue,
+    source_name: str,
+) -> None:
+    """Route an inbound ``ui_reply`` WS frame to the agent's bus.
+
+    Sync helper invoked from the receive loop. Submits the reply to
+    the agent's output router; the router resolves any pending Future
+    and broadcasts a supersede to other secondary outputs (which the
+    frontend translates back into an ``ack`` frame via StreamOutput).
+
+    The ack frame itself is enqueued for the WS forward task so the
+    submitting client gets ``{type: "ui_reply_ack", event_id, status}``
+    even when the reply was rejected (unknown id / superseded).
+    """
+    event_id = data.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        return
+    action_id = data.get("action_id", "")
+    values = data.get("values") or {}
+    user = data.get("user")
+    ts = data.get("ts") or time.time()
+
+    reply = UIReply(
+        event_id=event_id,
+        action_id=action_id,
+        values=values if isinstance(values, dict) else {},
+        user=user if isinstance(user, str) else None,
+        timestamp=float(ts) if isinstance(ts, (int, float)) else time.time(),
+    )
+
+    try:
+        _accepted, ack_status = agent.output_router.submit_reply_with_status(reply)
+    except Exception as e:
+        logger.warning("submit_reply failed", error=str(e), exc_info=True)
+        ack_status = "unknown"
+
+    ack = {
+        "type": "ui_reply_ack",
+        "event_id": event_id,
+        "status": ack_status,
+        "source": source_name,
+        "ts": time.time(),
+    }
+    try:
+        queue.put_nowait(ack)
+    except asyncio.QueueFull:
+        logger.debug("ui_reply_ack dropped — queue full")
+
+
+async def _process_input(
+    agent: Any,
+    content: str | list[dict[str, Any]],
+    queue: asyncio.Queue,
+    source_name: str,
+) -> None:
+    """Run ``agent.inject_input`` in its own task so the WS receive
+    loop can keep processing inbound frames (notably ``ui_reply``)
+    while the agent is mid-turn.
+
+    Errors and the post-turn ``idle`` notice are pushed via the same
+    outbound queue that ``_forward_queue`` drains, so the caller
+    doesn't need to share the websocket reference.
+
+    ``idle`` is suppressed when ``inject_input`` returned ``False`` —
+    the event was buffered for opportunistic mid-turn drain
+    (``Agent._pending_mid_turn_inputs``) and the OTHER turn that's
+    still running owns the next ``idle`` / ``processing_end`` frame.
+    Emitting our own here would race the FE's ``processingByTab``
+    flag off and the KohakUwUing indicator would blink off until
+    the next streaming chunk arrived (Bug 1).
+    """
+    try:
+        processed = await agent.inject_input(content, source="web")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        try:
+            queue.put_nowait(
+                {
+                    "type": "error",
+                    "source": source_name,
+                    "content": str(e),
+                    "ts": time.time(),
+                }
+            )
+        except asyncio.QueueFull:
+            logger.debug("input error frame dropped — queue full")
+        return
+    if not processed:
+        # Buffered for mid-turn drain — do NOT emit ``idle``; the
+        # turn that's actually running will fire its own terminal
+        # frames when it ends.
+        return
+    try:
+        queue.put_nowait({"type": "idle", "source": source_name, "ts": time.time()})
+    except asyncio.QueueFull:
+        logger.debug("idle frame dropped — queue full")
+
+
+async def _forward_queue(queue: asyncio.Queue, ws: WebSocket) -> None:
+    """Drain ``queue`` to the WS sink. Per-send isolation: a TypeError
+    / serialization failure on ONE frame must NOT kill the forward task
+    and silently stall every subsequent frame.
+
+    The original implementation exited the loop on the first send
+    failure. That ate 8 hours of debugging on 2026-05-28:
+    ``create_user_input_event`` was passing ``[TextPart(...)]`` (a
+    dataclass) into ``user_input_injected`` metadata, ``ws.send_json``
+    raised ``TypeError: Object of type TextPart is not JSON
+    serializable``, the forward task exited, and every subsequent frame
+    piled up in the queue forever. The FE saw the previous
+    ``tool_done`` and nothing after — backend logs showed the drain ran
+    and round-2 LLM ran to completion, but the WS had quietly died.
+    Hard-refresh "fixed" it by opening a new WS.
+    """
+    try:
+        while True:
+            msg = await queue.get()
+            if msg is None:
+                break
+            try:
+                await ws.send_json(msg)
+            except Exception as send_exc:
+                logger.warning(
+                    "WS send_json failed — dropping frame, forward task continues",
+                    msg_type=(msg.get("type") if isinstance(msg, dict) else None),
+                    activity_type=(
+                        msg.get("activity_type") if isinstance(msg, dict) else None
+                    ),
+                    error=str(send_exc),
+                    exc_info=True,
+                )
+    except Exception as e:
+        logger.warning("WS forward queue error", error=str(e), exc_info=True)
+
+
+def _register_channel_callbacks(
+    env: Any, queue: asyncio.Queue
+) -> list[tuple[Any, Any]]:
+    """Subscribe to all shared-channel sends for a graph environment."""
+    out: list[tuple[Any, Any]] = []
+
+    def make_cb(ch_name: str):
+        def cb(channel_name, message):
+            ts = (
+                message.timestamp.isoformat()
+                if hasattr(message.timestamp, "isoformat")
+                else str(message.timestamp)
+            )
+            queue.put_nowait(
+                {
+                    "type": "channel_message",
+                    "source": "channel",
+                    "channel": channel_name,
+                    "sender": message.sender,
+                    "content": message.content,
+                    "message_id": message.message_id,
+                    "timestamp": ts,
+                    "ts": time.time(),
+                }
+            )
+
+        return cb
+
+    for ch in env.shared_channels._channels.values():
+        cb = make_cb(ch.name)
+        ch.on_send(cb)
+        out.append((ch, cb))
+    return out
+
+
+async def _send_channel_history(ws: WebSocket, env: Any) -> None:
+    """Replay the shared-channel history that happened before this WS."""
+    for ch in env.shared_channels._channels.values():
+        for msg in ch.history:
+            ts = (
+                msg.timestamp.isoformat()
+                if hasattr(msg.timestamp, "isoformat")
+                else str(msg.timestamp)
+            )
+            await ws.send_json(
+                {
+                    "type": "channel_message",
+                    "source": "channel",
+                    "channel": ch.name,
+                    "sender": msg.sender,
+                    "content": msg.content,
+                    "message_id": msg.message_id,
+                    "timestamp": ts,
+                    "ts": time.time(),
+                    "history": True,
+                }
+            )
+
+
+async def _attach_io_remote(
+    websocket: WebSocket,
+    service: "TerrariumService",
+    creature_info: Any,
+    session_id: str,
+) -> None:
+    """Full-fidelity attach for a remote-worker creature.
+
+    Thin wrapper over :func:`laboratory.ws_proxy.proxy_ws_to_lab` —
+    the worker's :class:`TerrariumAttachAdapter` (a
+    :class:`WSProxyAdapter` subclass) mirrors the host-local
+    ``attach_io`` behaviour (StreamOutput + sibling subscribe +
+    channel callbacks + UIReply round-trip) and pumps every event
+    back through the unified ws-proxy.
+    """
+    cid = creature_info.creature_id
+    home = await _resolve_creature_home(service, cid)
+    if home is None or home == "_host":
+        raise KeyError(cid)
+    await proxy_ws_to_lab(
+        websocket=websocket,
+        sender=service.host,
+        demux=service.demux,
+        target_node=home,
+        namespace="terrarium.attach",
+        body={"creature_id": cid, "session_id": session_id},
+    )
+
+
+async def _resolve_creature_home(service: "TerrariumService", cid: str) -> str | None:
+    """Look up the creature's home node via the multi-node ``_home``
+    registry.
+
+    Returns:
+        - ``"_host"`` when the service has no multi-node routing
+          (standalone mode — :class:`LocalTerrariumService`).  The
+          caller treats this as "no remote path required" and the
+          standalone code path never reaches here in practice
+          because ``find_creature`` would have succeeded.
+        - The worker's ``client_id`` when the multi-node service
+          has the creature in its ``_home`` map.
+        - ``None`` when the resolver raises (transient lookup
+          failure); the caller surfaces this as ``KeyError``.
+    """
+    resolver = getattr(service, "_resolve_home", None)
+    if resolver is None:
+        return "_host"
+    try:
+        return await resolver(cid)
+    except Exception:
+        return None
+
+
+async def attach_io(
+    websocket: WebSocket,
+    service: "TerrariumService",
+    session_id: str,
+    creature_id: str,
+) -> None:
+    """Run the IO attach loop on ``websocket`` until it disconnects.
+
+    For a host-local creature, attaches a ``StreamOutput`` secondary
+    sink and forwards every event through the WS. For a remote
+    creature in a multi-node deployment, dispatches to the simpler
+    remote-streaming path below — the controller's engine doesn't
+    host the agent so there's no ``output_router`` to attach to;
+    instead we stream tokens via ``service.chat`` and events via
+    ``service.subscribe``.
+    """
+    # Lab-host mode has no host engine — ``host_engine_or_none``
+    # returns ``None`` and the attach goes straight to the remote
+    # streaming path.  Standalone resolves the creature on its
+    # host-local engine and attaches a StreamOutput sink directly.
+    engine = host_engine_or_none(service)
+    creature = None
+    if engine is not None:
+        try:
+            creature = find_creature(engine, session_id, creature_id)
+        except KeyError:
+            creature = None
+    if creature is None:
+        # CF-1 / CF-2: lab-host mode + cluster session — open one
+        # upstream per cluster member worker and multiplex inputs +
+        # outputs through a single client WS. Cross-worker ``target=``
+        # routes to the right upstream; channel messages from every
+        # member's replica converge onto the client WS (deduped by
+        # message_id) so chat history shows BOTH sides of a cluster
+        # channel rather than just the worker the URL is bound to.
+        groups = cluster_groups(service)
+        primary = None
+        for prim, member_sids in groups.items():
+            if session_id == prim or session_id in member_sids:
+                primary = prim
+                break
+        if primary is not None:
+            try:
+                await attach_io_cluster(websocket, service, primary, creature_id)
+                return
+            except KeyError:
+                # Cluster path lost — fall through to single-worker attach
+                # so a transient cluster-membership miss still serves the
+                # WS (degraded: single-worker view).
+                pass
+        # Not on a host engine (lab-host always; standalone when the
+        # creature genuinely doesn't exist) — try a remote worker via
+        # the service.  ``service.get_creature_info`` fans out in
+        # multi-node mode and returns the creature's home implicitly.
+        info = await service.get_creature_info(creature_id)
+        if info is None:
+            # ``get_creature_info`` is id-only, but the frontend keys
+            # its chat tab off the creature's *display name* (e.g.
+            # ``/creatures/quiet-meadow/chat``).  The standalone path
+            # resolves names via ``find_creature``; mirror that here
+            # for the lab-host path — scan the cluster-wide listing
+            # for a name match.  Without this the WebSocket closes
+            # with "creature '<name>' not found" and the user can't
+            # attach to a worker creature at all.
+            try:
+                for candidate in await service.list_creatures():
+                    if candidate.name == creature_id:
+                        info = candidate
+                        break
+            except Exception:  # pragma: no cover - defensive
+                info = None
+        if info is None:
+            raise KeyError(creature_id)
+        await _attach_io_remote(websocket, service, info, session_id)
+        return
+    agent = creature.agent
+
+    queue: asyncio.Queue = asyncio.Queue()
+    log = get_event_log(f"{session_id}:{creature.creature_id}")
+    out_module = StreamOutput(creature.name, queue, log, agent=agent)
+    agent.output_router.add_secondary(out_module)
+
+    # Multi-creature graphs: also subscribe to sibling creatures'
+    # output through the same WS so when the user types in another
+    # tab (alice → bob in the terrarium chat) bob's stream lands on
+    # this connection too. Without this every sibling tab would be
+    # silent until the user clicks back to the bound creature.
+    sibling_modules: list[tuple[Any, Any]] = []
+    if creature.graph_id and creature.graph_id in engine._topology.graphs:
+        graph = engine._topology.graphs[creature.graph_id]
+        for cid in graph.creature_ids:
+            if cid == creature.creature_id:
+                continue
+            try:
+                sibling = engine.get_creature(cid)
+            except KeyError:
+                continue
+            sib_module = StreamOutput(sibling.name, queue, log, agent=sibling.agent)
+            sibling.agent.output_router.add_secondary(sib_module)
+            sibling_modules.append((sibling.agent, sib_module))
+
+    # Surface graph-level channels for multi-creature sessions.
+    env = engine._environments.get(creature.graph_id)
+    channel_cbs: list[tuple[Any, Any]] = []
+    if env is not None and env.shared_channels.list_channels():
+        channel_cbs = _register_channel_callbacks(env, queue)
+        await _send_channel_history(websocket, env)
+
+    # Send a session_info frame so the frontend identifies the creature.
+    await websocket.send_json(
+        {
+            "type": "activity",
+            "activity_type": "session_info",
+            "source": creature.name,
+            "model": agent.config.model,
+            "agent_name": creature.name,
+            "ts": time.time(),
+        }
+    )
+
+    fwd_task = asyncio.create_task(_forward_queue(queue, websocket))
+
+    # Each user input fires its own task — the receive loop must NOT
+    # ``await`` ``agent.inject_input`` directly, because a tool that
+    # awaits a UIReply (``ask_user``, ``confirm``, etc.) would deadlock
+    # waiting for a frame the receive loop can't fetch while it's
+    # stuck inside ``inject_input``.
+    #
+    # These tasks are NOT cancelled on WS disconnect: the agent's work
+    # belongs to the engine, not the viewer. A browser refresh, a
+    # tab close, or a flaky remote connection must not abort an
+    # in-flight turn. We only detach the per-WS output sink and the
+    # forward task; the turn keeps running and a later reattach picks
+    # up the live stream + replays the event log.
+    input_tasks: list[asyncio.Task] = []
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "ui_reply":
+                # Phase B: inbound reply to an interactive OutputEvent.
+                # Route into the agent's output_router; it dispatches to
+                # the awaiting Future and broadcasts supersede to peers.
+                _handle_ui_reply(data, agent, websocket, queue, creature.name)
+                continue
+            if msg_type == "ui_dismiss":
+                # Display-only event was dismissed by the user. Nothing
+                # to await; informational so audit / observers can log.
+                continue
+            if msg_type != "input":
+                continue
+            content = _normalize_input_content(data)
+            if not content:
+                continue
+            # Resolve the target creature for THIS message. The frontend
+            # sends ``target`` so a single terrarium WS can drive every
+            # sub-tab; without honouring it, input from any non-bound
+            # tab would silently land on the bound creature.
+            target_name = (data.get("target") or "").strip()
+            target_creature = creature
+            target_agent = agent
+            if target_name and target_name != creature.name:
+                try:
+                    target_creature = find_creature(
+                        engine, creature.graph_id or session_id, target_name
+                    )
+                    target_agent = target_creature.agent
+                except KeyError:
+                    queue.put_nowait(
+                        {
+                            "type": "error",
+                            "source": target_name or creature.name,
+                            "content": (
+                                f"Cannot route to creature {target_name!r}: not "
+                                "found in this session."
+                            ),
+                            "ts": time.time(),
+                        }
+                    )
+                    continue
+            user_evt = {
+                "type": "user_input",
+                "source": target_creature.name,
+                "content": content,
+                "ts": time.time(),
+            }
+            log.append(user_evt)
+            await queue.put(user_evt)
+            # Fire-and-forget: spawn a task so the receive loop returns
+            # to ``await receive_json()`` immediately. Without this,
+            # interactive tools like ``ask_user`` deadlock — the agent
+            # awaits a UIReply while this loop sits inside
+            # ``inject_input`` unable to deliver it.
+            task = asyncio.create_task(
+                _process_input(target_agent, content, queue, target_creature.name)
+            )
+            input_tasks.append(task)
+            # Drop completed tasks so the list doesn't grow forever.
+            input_tasks[:] = [t for t in input_tasks if not t.done()]
+    finally:
+        queue.put_nowait(None)
+        fwd_task.cancel()
+        # Intentionally NOT cancelling ``input_tasks`` — see note above.
+        # They keep running on the engine; their late ``idle``/``error``
+        # frames write into the now-orphaned ``queue`` (unbounded, so
+        # ``put_nowait`` never blocks) and are GC'd with the queue once
+        # the tasks finish.
+        try:
+            agent.output_router.remove_secondary(out_module)
+        except Exception as e:
+            logger.warning(
+                "Failed to remove secondary output",
+                error=str(e),
+                exc_info=True,
+            )
+        # Detach sibling sinks too so we don't leak per-WS subscribers
+        # on each terrarium disconnect.
+        for sib_agent, sib_module in sibling_modules:
+            try:
+                sib_agent.output_router.remove_secondary(sib_module)
+            except Exception:
+                logger.warning(
+                    "Failed to remove sibling secondary output",
+                    exc_info=True,
+                )
+        for ch, cb in channel_cbs:
+            try:
+                ch.remove_on_send(cb)
+            except Exception as e:
+                logger.warning(
+                    "Failed to remove channel callback",
+                    error=str(e),
+                    exc_info=True,
+                )

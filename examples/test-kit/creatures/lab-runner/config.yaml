@@ -1,0 +1,107 @@
+name: lab-runner
+version: 0.1.0
+description: Flexible single-creature lab for package and creature testing
+controller:
+  model: ${OPENROUTER_MODEL:google/gemini-2.5-pro}
+  temperature: 0.2
+  max_tokens: 32768
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+system_prompt_file: prompts/system.md
+skills:
+- provider-aware-cli-builder
+input:
+  type: cli
+  prompt: 'Lab> '
+output:
+  type: stdout
+  controller_direct: true
+tools:
+- name: read
+  type: builtin
+- name: write
+  type: builtin
+- name: edit
+  type: builtin
+- name: multi_edit
+  type: builtin
+- name: bash
+  type: builtin
+- name: python
+  type: builtin
+- name: glob
+  type: builtin
+- name: grep
+  type: builtin
+- name: tree
+  type: builtin
+- name: json_read
+  type: builtin
+- name: json_write
+  type: builtin
+- name: web_fetch
+  type: builtin
+- name: web_search
+  type: builtin
+- name: search_memory
+  type: builtin
+- name: scratchpad
+  type: builtin
+- name: think
+  type: builtin
+- name: ask_user
+  type: builtin
+- name: info
+  type: builtin
+- name: stop_task
+  type: builtin
+- name: lab_report
+  type: custom
+  module: ../../test_kit/tools/lab_report.py
+  class: LabReportTool
+  reports_subdir: .kohaku/lab-reports
+- name: cli_anything_registry
+  type: custom
+  module: ../../test_kit/tools/cli_anything_registry.py
+  class: CliAnythingRegistryTool
+- name: cli_invoke
+  type: custom
+  module: ../../test_kit/tools/cli_invoke.py
+  class: CliInvokeTool
+  provider_name: cli-anything
+  timeout_s: 90
+  token_budget_mode: silent
+  provider_detect_cmd: ''
+- name: opencli_registry
+  type: custom
+  module: ../../test_kit/tools/opencli_registry.py
+  class: OpenCliRegistryTool
+- name: provider_select
+  type: custom
+  module: ../../test_kit/tools/provider_select.py
+  class: ProviderSelectTool
+  registry_path: ''
+- name: result_feedback
+  type: custom
+  module: ../../test_kit/tools/result_feedback.py
+  class: ResultFeedbackTool
+  agent_format: json
+subagents:
+- name: plan
+  type: builtin
+- name: worker
+  type: builtin
+- name: critic
+  type: builtin
+- name: research
+  type: builtin
+- name: memory_read
+  type: builtin
+- name: memory_write
+  type: builtin
+- name: summarize
+  type: builtin
+memory:
+  path: ./memory
+compact:
+  max_tokens: 1000000

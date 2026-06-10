@@ -1,0 +1,81 @@
+<template>
+  <div class="absolute top-9 right-2 z-30 w-56 bg-warm-50 dark:bg-warm-900 border border-warm-200 dark:border-warm-700 rounded shadow-lg py-1 text-xs">
+    <button class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" :disabled="!canReopen" @click="reopen">
+      <span class="i-carbon-undo" />
+      Reopen last closed
+      <span v-if="!canReopen" class="ml-auto text-warm-400">empty</span>
+    </button>
+    <button class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" @click="goDashboard">
+      <span class="i-carbon-home" />
+      Reset to Dashboard
+    </button>
+    <div class="border-t border-warm-200 dark:border-warm-700 my-1" />
+    <button class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" @click="openCatalog">
+      <span class="i-carbon-catalog" />
+      Open Catalog
+    </button>
+    <button class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" @click="openExtensions">
+      <span class="i-carbon-plug" />
+      Open Extensions
+    </button>
+    <button class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" @click="openSettings">
+      <span class="i-carbon-settings" />
+      Open Settings
+    </button>
+    <button v-if="auth.isAdmin" class="w-full text-left px-3 py-1.5 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-2" @click="openAdmin">
+      <span class="i-carbon-user-admin" />
+      Open Admin
+    </button>
+  </div>
+</template>
+
+<script setup>
+import { computed } from "vue"
+import { useTabsStore } from "@/stores/tabs"
+import { useAuthStore } from "@/stores/auth"
+
+const tabs = useTabsStore()
+const auth = useAuthStore()
+const props = defineProps({
+  // New tabs open into this group when set (the strip's own group).
+  groupId: { type: String, default: null },
+})
+const emit = defineEmits(["close"])
+
+const canReopen = computed(() => tabs.recentlyClosed.length > 0)
+
+function focusGroup() {
+  if (props.groupId) tabs.setFocusedGroup(props.groupId)
+}
+
+function reopen() {
+  focusGroup()
+  tabs.reopenLastClosed()
+  emit("close")
+}
+function goDashboard() {
+  focusGroup()
+  tabs.openTab({ kind: "dashboard", id: "dashboard" })
+  emit("close")
+}
+function openCatalog() {
+  focusGroup()
+  tabs.openTab({ kind: "catalog", id: "catalog" })
+  emit("close")
+}
+function openExtensions() {
+  focusGroup()
+  tabs.openTab({ kind: "extensions", id: "extensions" })
+  emit("close")
+}
+function openSettings() {
+  focusGroup()
+  tabs.openTab({ kind: "settings", id: "settings" })
+  emit("close")
+}
+function openAdmin() {
+  focusGroup()
+  tabs.openTab({ kind: "admin", id: "admin" })
+  emit("close")
+}
+</script>

@@ -1,0 +1,33 @@
+# KohakuTerrarium Android sandbox — bundled static binaries
+#
+# Reserved for future PIE+bionic-linked Android-native binaries.
+# **Currently empty.**  The bash tool resolves to ``/system/bin/sh``
+# (mksh) on the mobile profile and prepends ``/system/bin:/system/xbin``
+# to PATH so toybox-backed coreutils (``ls``, ``grep``, ``find``,
+# ``cat``, ``sed``, ``awk``, …) are found without any bundled
+# binary — ``/system`` is mounted with the ``exec`` flag (unlike
+# ``/data``) so apps can spawn those stock binaries without W^X /
+# PIE / SELinux gymnastics.
+#
+# Previous attempt (commit hash in git log): bundled busybox from
+# https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/.
+# Two showstoppers caught after the fact:
+#
+#   1. ``busybox-armv8l`` is named for the 32-bit ARMv8 userspace
+#      variant — it's actually a **32-bit** ARM ELF, not aarch64.
+#      Android rejects it in the ``arm64-v8a`` slot.
+#   2. All three (armv8l / armv7l / x86_64) are **non-PIE**.
+#      Android ≥ API 21 rejects non-PIE ``execve()`` with EACCES.
+#
+# Termux ships a proper aarch64-PIE ``libbusybox.so`` but it links
+# against ``libandroid-selinux.so`` (Termux-specific), so adopting
+# that would require shipping the selinux lib too.
+#
+# If we later need a real busybox (bash-only scripts, applets toybox
+# lacks like ``ash``-quirks), build PIE+bionic-linked binaries via
+# the NDK in ``dep/android-dep-collection`` and put the URLs back here.
+
+abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+
+# Reserved for future binaries.  Empty for now — see header.
+binaries = []

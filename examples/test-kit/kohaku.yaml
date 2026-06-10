@@ -1,0 +1,51 @@
+name: test-kit
+version: "0.1.0"
+description: "Minimal lab package for fast creature and terrarium testing"
+
+creatures:
+  - name: lab-runner
+  - name: root-privileged
+  - name: coordinator
+  - name: worker-base
+  - name: critic
+
+terrariums:
+  - name: lab-smoke
+  - name: task-team-minimal
+
+skills:
+  - name: autonomous-cli-builder
+    path: skills/autonomous-cli-builder/SKILL.md
+    description: CLI-Anything-first CLI creation skill packaged with test-kit.
+  - name: opencli-autonomous-builder
+    path: skills/opencli-autonomous-builder/SKILL.md
+    description: OpenCLI-first CLI creation skill packaged with test-kit.
+  - name: provider-aware-cli-builder
+    path: skills/provider-aware-cli-builder/SKILL.md
+    description: Unified provider-selection skill packaged with test-kit.
+  - name: structured-handoff
+    path: skills/structured-handoff/SKILL.md
+    description: Stable handoff skill for long or ambiguous coordinator-style delegation.
+  - name: review-protocol
+    path: skills/review-protocol/SKILL.md
+    description: Stable critic-side review skill for compact typed feedback and routing.
+
+tools:
+  - name: lab_report
+    module: test_kit.tools.lab_report
+    class: LabReportTool
+  - name: cli_anything_registry
+    module: test_kit.tools.cli_anything_registry
+    class: CliAnythingRegistryTool
+  - name: cli_invoke
+    module: test_kit.tools.cli_invoke
+    class: CliInvokeTool
+  - name: opencli_registry
+    module: test_kit.tools.opencli_registry
+    class: OpenCliRegistryTool
+  - name: provider_select
+    module: test_kit.tools.provider_select
+    class: ProviderSelectTool
+  - name: result_feedback
+    module: test_kit.tools.result_feedback
+    class: ResultFeedbackTool

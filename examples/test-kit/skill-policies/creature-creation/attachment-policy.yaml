@@ -1,0 +1,96 @@
+version: 1
+policy_name: creature-optional-skill-attachment
+description: >
+  Generic attachment and removal policy for system-level optional skills that
+  may be mounted onto creatures at creation time.
+
+resolution_order:
+  - explicit_remove
+  - explicit_add
+  - selected_bundle
+  - role_default_bundle
+  - safe_default_bundle
+
+origin_rules:
+  per_creature_controllable_skills:
+    recommended_origin: package
+    reason: >
+      Package skills are disabled by default unless the creature config opts in
+      through `skills:`. This makes per-creature default mounting controllable.
+  ambient_project_or_user_skills:
+    recommended_origin: project_or_user
+    reason: >
+      Project and user skills are enabled by default by origin. They are useful
+      as shared ambient helpers, but are not suitable as the only mechanism for
+      creature-specific default attachment.
+
+skill_contract:
+  required_metadata:
+    - skill_name
+    - category
+    - default_attach
+    - removable
+    - safe_for_default_bundle
+    - fallback_behavior
+    - supported_roles
+    - attach_scope
+  rules:
+    - Optional skills must never be the only path for a creature's core task completion.
+    - Removing an optional skill must not crash creature startup.
+    - Creature prompts and docs must not claim a removed skill is still available.
+    - Default-mounted optional skills must be low-risk, bounded in scope, and understandable without hidden state.
+    - Skills that need narrow domain approval should default to off and be user-selectable.
+
+default_bundles:
+  safe-default:
+    description: >
+      Minimal out-of-box bundle. New creatures remain usable even if no
+      optional system-level skill is attached.
+    skills: []
+  cli-creation-assisted:
+    description: >
+      Optional bundle for creatures whose main job includes creating or routing
+      custom CLIs.
+    skills:
+      - provider-aware-cli-builder
+    optional_addons:
+      - autonomous-cli-builder
+      - opencli-autonomous-builder
+
+role_profiles:
+  root:
+    default_bundle: safe-default
+    allowed_bundles:
+      - cli-creation-assisted
+    allow_user_add: true
+    allow_user_remove: true
+  coordinator:
+    default_bundle: safe-default
+    allowed_bundles:
+      - cli-creation-assisted
+    allow_user_add: true
+    allow_user_remove: true
+  worker-base:
+    default_bundle: safe-default
+    allowed_bundles: []
+    allow_user_add: true
+    allow_user_remove: true
+  critic:
+    default_bundle: safe-default
+    allowed_bundles: []
+    allow_user_add: true
+    allow_user_remove: true
+  curator:
+    default_bundle: safe-default
+    allowed_bundles: []
+    allow_user_add: true
+    allow_user_remove: true
+
+materialization_rule:
+  target_field: skills
+  config_behavior: >
+    Materialize the final resolved optional-skill set into the creature's
+    `skills:` list at creation time. Do not rely on implicit runtime diffs.
+  inheritance_note: >
+    Because `skills` is a plain list in creature config inheritance, child
+    configs replace the parent list instead of appending item-by-item.
