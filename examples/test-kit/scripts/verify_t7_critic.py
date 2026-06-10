@@ -16,7 +16,9 @@ def load_yaml(path: Path) -> dict:
 def main() -> None:
     manifest = load_yaml(ROOT / "kohaku.yaml")
     creatures = manifest.get("creatures", [])
-    creature_names = [entry["name"] if isinstance(entry, dict) else entry for entry in creatures]
+    creature_names = [
+        entry["name"] if isinstance(entry, dict) else entry for entry in creatures
+    ]
     assert "critic" in creature_names, creature_names
 
     config_path = ROOT / "creatures" / "critic" / "config.yaml"
@@ -50,9 +52,8 @@ def main() -> None:
     for required_snippet in [
         "shared_context_packet",
         "Output exactly one fenced YAML block named `review_result`",
-        "`root_context_patch`",
-        "`user_interrupt_recommended`",
-        "call `result_feedback`",
+        "include unsupported claims or freshness gaps here when relevant",
+        "explicitly lower confidence instead of inventing missing history.",
         "Borrow AutoGen's reflection protocol idea",
         "route_to",
     ]:

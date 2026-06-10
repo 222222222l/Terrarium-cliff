@@ -16,7 +16,9 @@ def load_yaml(path: Path) -> dict:
 def main() -> None:
     manifest = load_yaml(ROOT / "kohaku.yaml")
     creatures = manifest.get("creatures", [])
-    creature_names = [entry["name"] if isinstance(entry, dict) else entry for entry in creatures]
+    creature_names = [
+        entry["name"] if isinstance(entry, dict) else entry for entry in creatures
+    ]
     assert "coordinator" in creature_names, creature_names
 
     config_path = ROOT / "creatures" / "coordinator" / "config.yaml"
@@ -47,7 +49,7 @@ def main() -> None:
         "Use `provider_select` only when provider choice is relevant.",
         "Avoid AutoGen-style turn churn",
         "preferred_provider",
-        "artifact_expectation",
+        "Keep `deliverable` shorter than `goal` when possible.",
     ]:
         assert required_snippet in prompt_text, required_snippet
 

@@ -16,7 +16,9 @@ def load_yaml(path: Path) -> dict:
 def main() -> None:
     manifest = load_yaml(ROOT / "kohaku.yaml")
     creatures = manifest.get("creatures", [])
-    creature_names = [entry["name"] if isinstance(entry, dict) else entry for entry in creatures]
+    creature_names = [
+        entry["name"] if isinstance(entry, dict) else entry for entry in creatures
+    ]
     assert "worker-base" in creature_names, creature_names
 
     config_path = ROOT / "creatures" / "worker-base" / "config.yaml"
@@ -28,7 +30,9 @@ def main() -> None:
     controller = config.get("controller", {})
     assert controller.get("model") == "${WORKER_LLM_MODEL:qwen3.5:9b}"
     assert controller.get("temperature") == 0.0
-    assert controller.get("base_url") == "${WORKER_LLM_BASE_URL:http://127.0.0.1:11434/v1}"
+    assert (
+        controller.get("base_url") == "${WORKER_LLM_BASE_URL:http://127.0.0.1:11434/v1}"
+    )
     assert config.get("system_prompt_file") == "prompts/system.md"
 
     tool_names = [tool["name"] for tool in config.get("tools", [])]
@@ -48,7 +52,7 @@ def main() -> None:
     for required_snippet in [
         "optimized for small local models",
         "Prefer one tool call at a time.",
-        "Prefer tokenized `cli_invoke` commands over shell-style free text.",
+        "For `cli_invoke`, prefer the smallest valid schema",
         "Use `token_budget_mode: silent` by default.",
         "The upstream handoff should contain a `task_card`",
         "Keep the tool count small enough for 8B-9B local models to stay reliable.",

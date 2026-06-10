@@ -288,6 +288,24 @@ The demo compares:
 It writes a JSON summary and Markdown report under `.tmp-kt-home/reports/`.
 You must provide `TASK_TEAM_API_KEY` or `OPENROUTER_API_KEY` before running it.
 
+### Regression suite
+
+Use the stable offline suite before changing `test-kit` templates, tools, or
+protocol skills:
+
+```bash
+python .\examples\test-kit\scripts\verify_regression_suite.py
+```
+
+The default suite covers `T4-T10`, `T23-T25`, and `T30-T32`. It avoids external
+checkout dependencies and is also guarded by `tests/unit/test_test_kit_verify_suite.py`.
+
+To include verifiers that require sibling reference checkouts, run:
+
+```bash
+python .\examples\test-kit\scripts\verify_regression_suite.py --include-external
+```
+
 ### Swap plugins
 
 Add or remove entries in `plugins:`.
