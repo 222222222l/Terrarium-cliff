@@ -1,4 +1,7 @@
 /temp*/
+/.tmp-kt-home/
+output.md
+tmp_t10_rerun.*
 env
 .env
 ideas/
