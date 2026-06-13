@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -280,6 +281,11 @@ def _default_log_dir() -> Path:
 
 # Back-compat — callers that imported the constant for *display* still
 # resolve; live writes use :func:`_default_log_dir`.
+def _fallback_log_dir() -> Path:
+    """Return a sandbox-friendly fallback log directory."""
+    return Path(tempfile.gettempdir()) / "kohakuterrarium" / "logs"
+
+
 DEFAULT_LOG_DIR = Path.home() / ".kohakuterrarium" / "logs"
 
 
@@ -327,13 +333,31 @@ def _make_log_filename() -> str:
 
 def _create_file_handler() -> logging.Handler:
     """Create a per-process file handler with unique filename."""
-    log_dir = _default_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / _make_log_filename()
-    handler = logging.FileHandler(log_file, encoding="utf-8")
-    handler.setFormatter(ColoredFormatter(use_color=False))
-    handler.setLevel(logging.DEBUG)
+    last_error: OSError | None = None
+    for resolve_log_dir in (_default_log_dir, _fallback_log_dir):
+        try:
+            log_dir = resolve_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / _make_log_filename()
+            handler = logging.FileHandler(log_file, encoding="utf-8")
+            handler.setFormatter(ColoredFormatter(use_color=False))
+            handler.setLevel(logging.DEBUG)
+            return handler
+        except OSError as exc:
+            last_error = exc
+
+    handler = logging.NullHandler()
+    if last_error is not None:
+        handler._kt_log_init_error = last_error  # type: ignore[attr-defined]
     return handler
+
+
+def current_log_file() -> Path | None:
+    """Return the active framework log file path when file logging is enabled."""
+    handler = _handler
+    if isinstance(handler, logging.FileHandler):
+        return Path(handler.baseFilename)
+    return None
 
 
 def get_logger(name: str, level: int | str = logging.INFO) -> logging.Logger:

@@ -383,6 +383,31 @@ skill, tool, and plugin declared in `kohaku.yaml` resolves to a real
 package-relative file, and that `release-checklist.yaml` keeps regression,
 Linux / Windows compatibility, release notes, and rollback requirements visible.
 
+### Application startup sandbox smoke
+
+Run this smoke when you need to prove the real `kt` application entry can start
+inside a restricted filesystem sandbox:
+
+```bash
+python ./examples/test-kit/scripts/verify_t41_app_startup_sandbox.py --repo-root .
+```
+
+This check requires a Python environment that can import the local
+KohakuTerrarium source tree and runtime dependencies. It intentionally points
+`KT_CONFIG_DIR` at a regular file, then verifies `kt --version`, `kt --help`,
+`kt info` for `worker-base`, and `task-team-minimal` terrarium config loading.
+
+Before business-layer development or private release dry-runs, also verify the
+editable install and catalog path:
+
+```bash
+python ./examples/test-kit/scripts/verify_t42_editable_install_catalog.py --repo-root .
+```
+
+This uses an isolated temporary `KT_CONFIG_DIR`, runs `kt install -e`, checks
+`kt list`, resolves `kt info @test-kit/creatures/worker-base`, and confirms
+Studio catalog scanners can see both package creatures and terrariums.
+
 ### Swap plugins
 
 Add or remove entries in `plugins:`.

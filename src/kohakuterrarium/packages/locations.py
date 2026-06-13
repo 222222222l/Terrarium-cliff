@@ -10,10 +10,12 @@ import sys
 from pathlib import Path
 
 from kohakuterrarium.utils.logging import get_logger
+from kohakuterrarium.utils.config_dir import config_dir
 
 logger = get_logger(__name__)
 
-PACKAGES_DIR = Path.home() / ".kohakuterrarium" / "packages"
+_LEGACY_PACKAGES_DIR = Path.home() / ".kohakuterrarium" / "packages"
+PACKAGES_DIR = _LEGACY_PACKAGES_DIR
 LINK_SUFFIX = ".link"
 
 
@@ -22,16 +24,19 @@ def _packages_dir() -> Path:
 
     Tests and legacy callers historically monkeypatch
     ``kohakuterrarium.packages.locations.PACKAGES_DIR``. Consult that
-    module when present so the new split storage layer remains
-    compatible.
+    module when present so the new split storage layer remains compatible.
+    Otherwise resolve through ``KT_CONFIG_DIR`` so sandboxed app launches do
+    not write to the operator's real ``~/.kohakuterrarium``.
     """
     pkg_mod = sys.modules.get("kohakuterrarium.packages.locations")
     if pkg_mod is not None:
         current = getattr(pkg_mod, "PACKAGES_DIR", PACKAGES_DIR)
+        if current == _LEGACY_PACKAGES_DIR:
+            return config_dir() / "packages"
         if isinstance(current, Path):
             return current
         return Path(current)
-    return PACKAGES_DIR
+    return config_dir() / "packages"
 
 
 def read_link(name: str) -> Path | None:

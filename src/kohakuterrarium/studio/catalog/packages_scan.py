@@ -38,6 +38,7 @@ from pathlib import Path
 import yaml
 
 from kohakuterrarium.core.config import load_agent_config
+from kohakuterrarium.packages import locations as pkg_locations
 from kohakuterrarium.packages.locations import PACKAGES_DIR, get_package_root
 from kohakuterrarium.packages.walk import list_packages
 
@@ -111,13 +112,33 @@ def _build_package_root_map() -> dict[str, str]:
     back into an ``@package/...`` reference.
     """
     mapping: dict[str, str] = {}
-    if not PACKAGES_DIR.exists():
+    packages_dir = (
+        Path(PACKAGES_DIR)
+        if PACKAGES_DIR != pkg_locations.PACKAGES_DIR
+        else pkg_locations._packages_dir()
+    )
+    if not packages_dir.exists():
         return mapping
     for pkg in list_packages():
         pkg_root = get_package_root(pkg["name"])
         if pkg_root is not None:
             mapping[str(pkg_root.resolve())] = pkg["name"]
     return mapping
+
+
+def _manifest_slot_path(kind: str, entry: object) -> str | None:
+    """Resolve a manifest creature/terrarium entry to a package-relative path."""
+    if isinstance(entry, str):
+        return f"{kind}/{entry}"
+    if not isinstance(entry, dict):
+        return None
+    rel = entry.get("path")
+    if rel:
+        return str(rel)
+    name = entry.get("name")
+    if name:
+        return f"{kind}/{name}"
+    return None
 
 
 def to_ref(path: Path, package_roots: dict[str, str]) -> str:
@@ -301,9 +322,13 @@ def scan_catalog() -> list[CatalogEntry]:
         pkg_path = Path(pkg["path"])
         pkg_name = pkg["name"]
         for c in pkg.get("creatures", []):
-            _add_creature(pkg_path / c["path"], source=pkg_name)
+            rel = _manifest_slot_path("creatures", c)
+            if rel:
+                _add_creature(pkg_path / rel, source=pkg_name)
         for t in pkg.get("terrariums", []):
-            _add_terrarium(pkg_path / t["path"], source=pkg_name)
+            rel = _manifest_slot_path("terrariums", t)
+            if rel:
+                _add_terrarium(pkg_path / rel, source=pkg_name)
 
     # Scan local project directories
     cwd = Path.cwd()
@@ -395,7 +420,7 @@ def scan_creatures_in_dirs(base_dirs: list[Path]) -> list[dict]:
     for pkg in list_packages():
         pkg_path = Path(pkg["path"])
         for c in pkg.get("creatures", []):
-            rel = c.get("path") if isinstance(c, dict) else None
+            rel = _manifest_slot_path("creatures", c)
             if not rel:
                 continue
             _emit(pkg_path / rel)
@@ -463,7 +488,7 @@ def scan_terrariums_in_dirs(base_dirs: list[Path]) -> list[dict]:
     for pkg in list_packages():
         pkg_path = Path(pkg["path"])
         for t in pkg.get("terrariums", []):
-            rel = t.get("path") if isinstance(t, dict) else None
+            rel = _manifest_slot_path("terrariums", t)
             if not rel:
                 continue
             _emit(pkg_path / rel)

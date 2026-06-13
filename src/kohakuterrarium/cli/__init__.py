@@ -484,6 +484,14 @@ def _dispatch_run(args: argparse.Namespace) -> int:
     )
 
 
+def _dispatch_info(args: argparse.Namespace) -> int:
+    """Handle the 'info' command."""
+    agent_path = args.agent_path
+    if agent_path.startswith("@"):
+        agent_path = str(resolve_package_path(agent_path))
+    return show_agent_info_cli(agent_path)
+
+
 def _dispatch_resume(args: argparse.Namespace) -> int:
     """Handle the 'resume' command."""
     return resume_cli(
@@ -554,7 +562,7 @@ COMMANDS: dict[str, callable] = {
     "run": _dispatch_run,
     "resume": _dispatch_resume,
     "list": lambda args: list_cli(args.path),
-    "info": lambda args: show_agent_info_cli(args.agent_path),
+    "info": _dispatch_info,
     "login": lambda args: login_cli(args.provider),
     "install": lambda args: install_cli(args.source, args.editable, args.name),
     "uninstall": lambda args: uninstall_cli(args.name),

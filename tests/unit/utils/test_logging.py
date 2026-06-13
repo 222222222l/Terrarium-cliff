@@ -23,6 +23,7 @@ from kohakuterrarium.utils.logging import (
     _make_log_filename,
     _supports_color,
     configure_utf8_stdio,
+    current_log_file,
     disable_colors,
     disable_stderr_logging,
     disable_tui_logging,
@@ -358,6 +359,35 @@ class TestGetLogger:
         get_logger("kohakuterrarium.gl_no_env")
         root = logging.getLogger("kohakuterrarium")
         assert not any(isinstance(h, FlushingStreamHandler) for h in root.handlers)
+
+    def test_unwritable_config_dir_falls_back_to_temp(self, monkeypatch, tmp_path):
+        def _deny_config_dir():
+            raise PermissionError("blocked by sandbox")
+
+        monkeypatch.setattr(ktlog, "config_dir", _deny_config_dir)
+        monkeypatch.setattr(ktlog.tempfile, "gettempdir", lambda: str(tmp_path))
+
+        get_logger("kohakuterrarium.gl_sandbox_fallback")
+
+        log_file = current_log_file()
+        assert log_file is not None
+        assert log_file.parent == tmp_path / "kohakuterrarium" / "logs"
+
+    def test_unwritable_config_and_temp_dirs_use_null_handler(
+        self, monkeypatch, tmp_path
+    ):
+        fallback_file = tmp_path / "not-a-dir"
+        fallback_file.write_text("occupied", encoding="utf-8")
+
+        def _deny_config_dir():
+            raise PermissionError("blocked by sandbox")
+
+        monkeypatch.setattr(ktlog, "config_dir", _deny_config_dir)
+        monkeypatch.setattr(ktlog, "_fallback_log_dir", lambda: fallback_file)
+
+        get_logger("kohakuterrarium.gl_null_fallback")
+
+        assert isinstance(ktlog._handler, logging.NullHandler)
 
 
 # ── set_level ────────────────────────────────────────────────────────

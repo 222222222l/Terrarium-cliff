@@ -448,6 +448,53 @@ class TestScanInDirs:
         assert [t["name"] for t in out] == ["swe_team"]
         assert out[0]["path"].startswith("@kt-biome/")
 
+    def test_name_only_manifest_entries_use_default_package_paths(
+        self, monkeypatch, tmp_path
+    ):
+        pkg_root = tmp_path / "test-kit"
+        cdir = pkg_root / "creatures" / "worker-base"
+        tdir = pkg_root / "terrariums" / "task-team-minimal"
+        cdir.mkdir(parents=True)
+        tdir.mkdir(parents=True)
+        (cdir / "config.yaml").write_text("name: worker-base")
+        (tdir / "terrarium.yaml").write_text("name: task-team-minimal")
+
+        monkeypatch.setattr(
+            scan_mod,
+            "list_packages",
+            lambda: [
+                {
+                    "name": "test-kit",
+                    "path": str(pkg_root),
+                    "creatures": [{"name": "worker-base"}],
+                    "terrariums": [{"name": "task-team-minimal"}],
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            scan_mod,
+            "_build_package_root_map",
+            lambda: {str(pkg_root.resolve()): "test-kit"},
+        )
+
+        creatures = scan_mod.scan_creatures_in_dirs([])
+        terrariums = scan_mod.scan_terrariums_in_dirs([])
+
+        assert creatures == [
+            {
+                "name": "worker-base",
+                "path": "@test-kit/creatures/worker-base",
+                "description": "",
+            }
+        ]
+        assert terrariums == [
+            {
+                "name": "task-team-minimal",
+                "path": "@test-kit/terrariums/task-team-minimal",
+                "description": "",
+            }
+        ]
+
     def test_packages_and_base_dirs_combine(self, monkeypatch, tmp_path):
         # A user with both an installed package AND a cwd/creatures
         # dir wired into base_dirs should see both sources in the

@@ -153,6 +153,13 @@ class TestFindPackageRootForPath:
 
 
 class TestPackagesDirSeam:
+    def test_packages_dir_defaults_to_config_dir(self, tmp_path, monkeypatch):
+        kt_home = tmp_path / "kt-home"
+        monkeypatch.setenv("KT_CONFIG_DIR", str(kt_home))
+        monkeypatch.setattr(loc_mod, "PACKAGES_DIR", loc_mod._LEGACY_PACKAGES_DIR)
+
+        assert loc_mod._packages_dir() == kt_home / "packages"
+
     def test_packages_dir_honours_monkeypatched_str_path(self, tmp_path, monkeypatch):
         # Legacy callers may set PACKAGES_DIR to a str — it must be coerced.
         monkeypatch.setattr(loc_mod, "PACKAGES_DIR", str(tmp_path))

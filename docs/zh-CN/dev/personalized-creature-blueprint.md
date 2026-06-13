@@ -256,6 +256,20 @@ tags:
   - 交付物：manifest 引用解析验证、私有发布 checklist、安装就绪说明文档
   - 完成标准：package manifest 中公开的资源没有悬空引用；路径保持相对与双端友好；私有发布前明确默认回归、T39 双端门禁、release notes 与 rollback 要求
   - 备注：已新增 `examples/test-kit/release-checklist.yaml`、`examples/test-kit/scripts/verify_t40_package_install_readiness.py` 与 `docs/zh-CN/dev/t40-package-install-readiness.md`，并纳入默认回归；该门禁只做离线 manifest 自洽检查，不把真实 `kt install`、网络或全局 package cache 状态放入默认套件。
+- [x] `T41` 建立应用层启动与沙箱写入兼容门禁
+  - 状态：已完成
+  - 解决问题：T40 证明 package manifest 自洽，但真实 `kt` 入口在用户配置目录不可写时仍可能因日志初始化失败而无法启动
+  - 适合模块：`src` + `scripts` + `docs`
+  - 交付物：日志目录 fallback、应用层 smoke 脚本、沙箱兼容说明文档
+  - 完成标准：`kt --version`、`kt --help`、本地 creature info 与 terrarium 配置加载在 `KT_CONFIG_DIR` 不可作为目录创建时仍可通过
+  - 备注：已修复 `kohakuterrarium.utils.logging`，默认日志目录不可写时先降级到系统临时目录，仍失败则使用 `NullHandler`；已新增 `examples/test-kit/scripts/verify_t41_app_startup_sandbox.py` 与 `docs/zh-CN/dev/t41-app-startup-sandbox.md`。该门禁需要本地应用依赖环境，暂不纳入默认离线回归。
+- [x] `T42` 建立 editable 安装与 catalog 可见性门禁
+  - 状态：已完成
+  - 解决问题：真实 `kt install -e`、`@pkg` info 引用与 Studio catalog 扫描仍可能绕过 T40 的离线 manifest 自洽检查
+  - 适合模块：`src` + `scripts` + `docs`
+  - 交付物：`KT_CONFIG_DIR/packages` 动态解析、`kt info @pkg/...` 支持、name-only manifest catalog 扫描、应用层安装 smoke
+  - 完成标准：隔离 `KT_CONFIG_DIR` 下可 editable 安装 `test-kit`；`kt list`、`kt info @test-kit/creatures/worker-base`、catalog creature/terrarium 扫描均可见
+  - 备注：已新增 `examples/test-kit/scripts/verify_t42_editable_install_catalog.py` 与 `docs/zh-CN/dev/t42-editable-install-catalog.md`；该门禁需要本地应用依赖环境，暂不纳入默认离线回归。
 
 ### 任务组 C. 主工作流模板
 - [x] `T4` 实现 `root-privileged` 模板
@@ -533,12 +547,13 @@ tags:
 - 验证 `OpenCLI` 只在浏览器类任务中被选中，不扩散为总依赖。
 - 验证 MCP、package、marketplace 能被纳入统一能力路由与分发逻辑。
 - 验证失败时只回传最小必要错误上下文，而不是完整过程日志。
+- 应用层 smoke 需要单独验证真实 `kt` 入口在受限配置目录下可启动，并验证 editable package 安装后的 `@pkg` 引用与 Studio catalog 可见性；这些检查依赖本地应用环境，不放入默认离线套件。
 
 ## 14. 当前状态
-- 当前阶段：`Phase B` 已完成，`Phase C/D` 前的 `P0` 收束项、`T38` 阶段性可用性门禁、`T39` Linux / Windows 双端兼容收口与 `T40` package 安装就绪门禁已经落地，等待验收
-- 当前重点：`T11-T19` 已完成，记忆治理、治理插件与可控演化草案链路已形成最小闭环；`T38` 已把继续实装前的阶段验收固化为默认回归项，`T39` 已把后续任务默认双端支持写入原则，`T40` 已把 T35 发布治理推进到 manifest 安装就绪检查
-- 当前下一步：`P1 = T29/T35 后续实装或 CLI/Studio/marketplace 更高层可用性验证`，根据验收决定
-- 当前判断：入口控制面、任务编排层、执行骨架、结构化评审层、最小 terrarium、package skill 发现路径、可选 skill 规则、静默执行、barrier、模块自描述、关键验证回归入口、统一能力路由、发布治理、安装就绪门禁、memory schema、低频学习闭环、审批 gate、预算策略、审计插件、可控演化草案协议、阶段性可用性门禁与 Linux / Windows 双端兼容原则已经建立。路线没有偏离最初目标；后续可以进入更高层实装，但每个任务仍应保持“一项完成后暂停验收”的节奏。
+- 当前阶段：`Phase B` 已完成，`Phase C/D` 前的 `P0` 收束项、`T38` 阶段性可用性门禁、`T39` Linux / Windows 双端兼容收口、`T40` package 安装就绪门禁、`T41` 应用层沙箱启动门禁与 `T42` editable 安装 / catalog 可见性门禁已经落地
+- 当前重点：`T11-T19` 已完成，记忆治理、治理插件与可控演化草案链路已形成最小闭环；`T38` 已把继续实装前的阶段验收固化为默认回归项，`T39` 已把后续任务默认双端支持写入原则，`T40` 已把 T35 发布治理推进到 manifest 安装就绪检查，`T41-T42` 已修复真实 CLI 在受限配置目录和 editable package 安装链路下的启动、引用与 catalog 可见性阻断
+- 当前下一步：可进入具体业务层开发；若后续业务需要 Studio UI、marketplace candidate 或真实 LLM 链路，再分别运行对应应用 smoke / live smoke，而不是继续扩写模板协议文本
+- 当前判断：入口控制面、任务编排层、执行骨架、结构化评审层、最小 terrarium、package skill 发现路径、可选 skill 规则、静默执行、barrier、模块自描述、关键验证回归入口、统一能力路由、发布治理、安装就绪门禁、应用层沙箱启动门禁、editable 安装与 catalog 可见性门禁、memory schema、低频学习闭环、审批 gate、预算策略、审计插件、可控演化草案协议、阶段性可用性门禁与 Linux / Windows 双端兼容原则已经建立。路线没有偏离最初目标；后续可以进入业务层开发。
 
 ## 15. 更新规则
 后续每完成一项，必须同步更新本文件：
