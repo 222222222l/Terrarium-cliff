@@ -20,10 +20,12 @@ from kohakuterrarium.skills.discovery import load_skill_from_path
 from kohakuterrarium.skills.user_slash import build_user_skill_turn
 
 
-COORDINATOR_SYSTEM = (TEST_KIT_ROOT / "creatures" / "coordinator" / "prompts" / "system.md").read_text(
-    encoding="utf-8"
-)
-CRITIC_SYSTEM = (TEST_KIT_ROOT / "creatures" / "critic" / "prompts" / "system.md").read_text(encoding="utf-8")
+COORDINATOR_SYSTEM = (
+    TEST_KIT_ROOT / "creatures" / "coordinator" / "prompts" / "system.md"
+).read_text(encoding="utf-8")
+CRITIC_SYSTEM = (
+    TEST_KIT_ROOT / "creatures" / "critic" / "prompts" / "system.md"
+).read_text(encoding="utf-8")
 STRUCTURED_HANDOFF_SKILL = TEST_KIT_ROOT / "skills" / "structured-handoff" / "SKILL.md"
 REVIEW_PROTOCOL_SKILL = TEST_KIT_ROOT / "skills" / "review-protocol" / "SKILL.md"
 HANDOFF_MAX_TOKENS = 2048
@@ -116,7 +118,10 @@ def _serialize_payload(payload: dict[str, Any]) -> str:
 
 def _count_keyword_buckets(text: str, buckets: dict[str, list[str]]) -> dict[str, bool]:
     haystack = text.lower()
-    return {name: any(keyword.lower() in haystack for keyword in keywords) for name, keywords in buckets.items()}
+    return {
+        name: any(keyword.lower() in haystack for keyword in keywords)
+        for name, keywords in buckets.items()
+    }
 
 
 def _score_handoff(payload: dict[str, Any]) -> dict[str, Any]:
@@ -127,10 +132,20 @@ def _score_handoff(payload: dict[str, Any]) -> dict[str, Any]:
             "primary_symbol": ["600519"],
             "benchmark_symbol": ["000001"],
             "quote_url": ["qt.gtimg.cn", "quote_url"],
-            "no_fabrication_constraint": ["fundamental", "earnings", "news", "fabricat"],
+            "no_fabrication_constraint": [
+                "fundamental",
+                "earnings",
+                "news",
+                "fabricat",
+            ],
             "comparison_deliverable": ["comparison", "benchmark", "relative"],
             "evidence_requirement": ["evidence", "raw quote", "result_path", "source"],
-            "open_question": ["open_question", "benchmark window", "previous close", "intraday"],
+            "open_question": [
+                "open_question",
+                "benchmark window",
+                "previous close",
+                "intraday",
+            ],
             "provider_choice": ["cli-anything"],
             "task_kind": ["service_cli_task"],
         },
@@ -146,8 +161,7 @@ def _score_handoff(payload: dict[str, Any]) -> dict[str, Any]:
     missing_required_fields = [
         name
         for name, value in required_fields.items()
-        if value in (None, "", [])
-        and not (name == "open_questions" and value == [])
+        if value in (None, "", []) and not (name == "open_questions" and value == [])
     ]
     return {
         "bucket_hits": coverage,
@@ -169,10 +183,20 @@ def _score_review(payload: dict[str, Any]) -> dict[str, Any]:
         text,
         {
             "benchmark_evidence_gap": ["000001", "benchmark", "comparison"],
-            "unsupported_recommendation_risk": ["buy", "unsupported", "fundamental", "investment advice"],
+            "unsupported_recommendation_risk": [
+                "buy",
+                "unsupported",
+                "fundamental",
+                "investment advice",
+            ],
             "freshness_gap": ["stale", "freshness", "intraday", "latest"],
             "route_present": ["worker-base", "user", "root-privileged", "coordinator"],
-            "required_change_present": ["required_changes", "fetch", "remove", "revise"],
+            "required_change_present": [
+                "required_changes",
+                "fetch",
+                "remove",
+                "revise",
+            ],
             "confidence_present": ["low", "medium", "high"],
         },
     )
@@ -186,9 +210,7 @@ def _score_review(payload: dict[str, Any]) -> dict[str, Any]:
         "confidence": payload.get("confidence"),
     }
     missing_required_fields = [
-        name
-        for name, value in required_fields.items()
-        if value in (None, "", [])
+        name for name, value in required_fields.items() if value in (None, "", [])
     ]
     return {
         "bucket_hits": coverage,
@@ -249,13 +271,13 @@ execution_packet:
   fetched_symbols:
     - 600519
   command:
-    - curl.exe
+    - curl
     - https://qt.gtimg.cn/q=sh600519
   claims_made:
     - 600519 outperformed 000001 today
     - strong buy because the company has strong fundamentals
   evidence_paths:
-    - E:\\private-ecosystem-v2\\.kohaku\\cli-runs\\demo-600519\\result.json
+    - .kohaku/cli-runs/demo-600519/result.json
   missing_artifacts:
     - benchmark quote for 000001
     - freshness note explaining whether the comparison is intraday or previous close
@@ -265,7 +287,9 @@ Review the result and decide whether it passes, should be revised, or should be 
 """.strip()
 
 
-def _invoke(system_prompt: str, user_message: str, *, max_tokens: int) -> tuple[str, dict[str, Any], str]:
+def _invoke(
+    system_prompt: str, user_message: str, *, max_tokens: int
+) -> tuple[str, dict[str, Any], str]:
     raw = CALL_ROLE_LLM(system_prompt, user_message, max_tokens=max_tokens)
     payload, block = _extract_yaml_block(raw)
     return raw, payload, block
@@ -276,7 +300,9 @@ def _run_handoff_case(skill_enabled: bool) -> dict[str, Any]:
     if skill_enabled:
         skill = _load_skill(STRUCTURED_HANDOFF_SKILL, "package:test-kit")
         request = build_user_skill_turn(skill, request)
-    raw, payload, block = _invoke(COORDINATOR_SYSTEM, request, max_tokens=HANDOFF_MAX_TOKENS)
+    raw, payload, block = _invoke(
+        COORDINATOR_SYSTEM, request, max_tokens=HANDOFF_MAX_TOKENS
+    )
     return {
         "raw_output": raw,
         "payload": payload,
@@ -385,7 +411,9 @@ def main() -> None:
         },
     }
 
-    output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     _write_report(report_path, summary)
 
     print(
@@ -439,16 +467,28 @@ def main() -> None:
                 "handoff": {
                     "baseline": baseline_handoff["score"]["covered_bucket_count"],
                     "skill": skill_handoff["score"]["covered_bucket_count"],
-                    "structural_baseline": baseline_handoff["score"]["is_structurally_complete"],
-                    "structural_skill": skill_handoff["score"]["is_structurally_complete"],
-                    "gate_baseline": "FAIL" if baseline_handoff["score"]["is_hard_fail"] else "PASS",
-                    "gate_skill": "FAIL" if skill_handoff["score"]["is_hard_fail"] else "PASS",
+                    "structural_baseline": baseline_handoff["score"][
+                        "is_structurally_complete"
+                    ],
+                    "structural_skill": skill_handoff["score"][
+                        "is_structurally_complete"
+                    ],
+                    "gate_baseline": (
+                        "FAIL" if baseline_handoff["score"]["is_hard_fail"] else "PASS"
+                    ),
+                    "gate_skill": (
+                        "FAIL" if skill_handoff["score"]["is_hard_fail"] else "PASS"
+                    ),
                 },
                 "review": {
                     "baseline": baseline_review["score"]["covered_bucket_count"],
                     "skill": skill_review["score"]["covered_bucket_count"],
-                    "structural_baseline": baseline_review["score"]["is_structurally_complete"],
-                    "structural_skill": skill_review["score"]["is_structurally_complete"],
+                    "structural_baseline": baseline_review["score"][
+                        "is_structurally_complete"
+                    ],
+                    "structural_skill": skill_review["score"][
+                        "is_structurally_complete"
+                    ],
                 },
             },
             ensure_ascii=False,
@@ -456,7 +496,9 @@ def main() -> None:
     )
     print(f"T9_T10_DEMO_JSON={json.dumps(summary, ensure_ascii=False)}")
     if os.environ.get("T9_T10_DEMO_RAISE_SUMMARY", "").strip() in {"1", "true", "True"}:
-        raise RuntimeError(f"T9_T10_DEMO_JSON={json.dumps(summary, ensure_ascii=False)}")
+        raise RuntimeError(
+            f"T9_T10_DEMO_JSON={json.dumps(summary, ensure_ascii=False)}"
+        )
 
 
 if __name__ == "__main__":

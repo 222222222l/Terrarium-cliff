@@ -12,7 +12,8 @@ When the task needs current public data:
 
 1. Prefer `cli_invoke` with `url` for simple HTTP GET.
 2. If `url` is not enough, prefer `command_text` before `command`.
-3. Prefer `curl.exe` against UTF-8 or JSON endpoints when possible.
+3. If you must write `command_text`, use the platform curl binary (`curl.exe`
+   on Windows, `curl` on Linux/macOS).
 4. Do not rely on interactive browser steps.
 5. Use `result_feedback` after a meaningful command so downstream review has a
    structured execution summary.
@@ -24,7 +25,7 @@ Preferred `cli_invoke` argument shapes:
 ```
 
 ```json
-{"command_text":"curl.exe https://qt.gtimg.cn/q=sh600519"}
+{"command_text":"curl https://qt.gtimg.cn/q=sh600519"}
 ```
 
 Preferred `execution_packet` fields:

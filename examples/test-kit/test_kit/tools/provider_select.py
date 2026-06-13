@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-import sys
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,9 @@ try:
     from test_kit.provider_selection import select_provider_for_task
 except ModuleNotFoundError:
     module_path = Path(__file__).resolve().parents[1] / "provider_selection.py"
-    spec = importlib.util.spec_from_file_location("test_kit.provider_selection", module_path)
+    spec = importlib.util.spec_from_file_location(
+        "test_kit.provider_selection", module_path
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Unable to load provider_selection from {module_path}")
     module = importlib.util.module_from_spec(spec)
@@ -35,7 +37,7 @@ class ProviderSelectTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Resolve the preferred CLI provider for a task card and require user choice when overlap remains ambiguous."
+        return "Resolve the execution surface for a task card and require user choice when provider overlap remains ambiguous."
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -47,16 +49,20 @@ class ProviderSelectTool(BaseTool):
             "properties": {
                 "task_kind": {
                     "type": "string",
-                    "description": "Normalized task kind such as service_cli_task or browser_public_task.",
+                    "description": "Normalized task kind such as docs_task, mcp_tool_task, service_cli_task, or browser_public_task.",
                 },
                 "preferred_provider": {
                     "type": "string",
-                    "description": "Optional provider override from the task card.",
+                    "description": "Optional external provider override from the task card. Use none for built-in or MCP routes.",
                 },
                 "access_mode": {
                     "type": "string",
-                    "enum": ["local", "service", "browser", "desktop"],
+                    "enum": ["local", "service", "browser", "desktop", "mcp"],
                     "description": "High-level execution mode used when task_kind is not enough.",
+                },
+                "mcp_server_hint": {
+                    "type": "string",
+                    "description": "Optional MCP server or capability hint when routing to MCP.",
                 },
                 "needs_browser_session": {
                     "type": "boolean",
@@ -69,7 +75,7 @@ class ProviderSelectTool(BaseTool):
                 },
                 "target_hint": {
                     "type": "string",
-                    "description": "Optional hint such as adapter, website, cli, or desktop.",
+                    "description": "Optional hint such as adapter, website, cli, desktop, or mcp.",
                 },
                 "registry_path": {
                     "type": "string",
@@ -127,7 +133,9 @@ class ProviderSelectTool(BaseTool):
     def _find_repo_root(self, start_dir: Path) -> Path:
         candidates = [start_dir.resolve(), *start_dir.resolve().parents]
         for candidate in candidates:
-            if (candidate / "examples" / "test-kit" / "registry" / "registry.yaml").exists():
+            if (
+                candidate / "examples" / "test-kit" / "registry" / "registry.yaml"
+            ).exists():
                 return candidate
         return start_dir.resolve()
 
@@ -137,6 +145,8 @@ class ProviderSelectTool(BaseTool):
             "Resolve the preferred provider for a task card.\n\n"
             "## Behavior\n"
             "- respects explicit preferred_provider\n"
+            "- routes docs, codebase edit, and analysis tasks to built-in tools\n"
+            "- routes MCP-shaped tasks to MCP meta-tools\n"
             "- auto-selects when routing is clear\n"
             "- returns needs_user_choice when CLI-Anything and OpenCLI overlap and the model should not guess\n"
         )

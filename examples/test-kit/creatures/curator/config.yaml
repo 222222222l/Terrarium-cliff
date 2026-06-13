@@ -1,0 +1,83 @@
+name: curator
+version: 0.1.0
+description: Memory curation creature for turning completed task context into layered long-term assets
+controller:
+  model: ${CURATOR_LLM_MODEL:deepseek/deepseek-chat-v3}
+  temperature: 0.1
+  max_tokens: 32768
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+system_prompt_file: prompts/system.md
+skills:
+- memory-curation
+output:
+  type: stdout
+  controller_direct: true
+plugins:
+- name: budget
+  options:
+    turn_budget:
+    - 30
+    - 50
+    tool_call_budget:
+    - 50
+    - 80
+- name: audit_guard
+  type: custom
+  module: ../../test_kit/plugins/audit_guard.py
+  class: AuditGuardPlugin
+  audit_path: .kohaku/audit/audit-guard.jsonl
+  tracked_tools:
+  - write
+  - edit
+- name: permgate
+  options:
+    gated_tools:
+    - write
+    - edit
+    allowlist:
+    - read
+    - glob
+    - grep
+    - json_read
+    - scratchpad
+    - think
+    - result_feedback
+    - lab_report
+    - stop_task
+    timeout_s:
+    surface: modal
+tools:
+- name: read
+  type: builtin
+- name: write
+  type: builtin
+- name: edit
+  type: builtin
+- name: glob
+  type: builtin
+- name: grep
+  type: builtin
+- name: json_read
+  type: builtin
+- name: scratchpad
+  type: builtin
+- name: think
+  type: builtin
+- name: stop_task
+  type: builtin
+- name: result_feedback
+  type: custom
+  module: ../../test_kit/tools/result_feedback.py
+  class: ResultFeedbackTool
+  agent_format: json
+- name: lab_report
+  type: custom
+  module: ../../test_kit/tools/lab_report.py
+  class: LabReportTool
+  reports_subdir: .kohaku/lab-reports
+memory:
+  path: ./memory
+  schema: ../../memory-schema/schema.yaml
+compact:
+  max_tokens: 1000000

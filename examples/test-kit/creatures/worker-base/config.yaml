@@ -12,6 +12,37 @@ system_prompt_file: prompts/system.md
 output:
   type: stdout
   controller_direct: true
+plugins:
+- name: budget
+  options:
+    turn_budget:
+    - 50
+    - 80
+    tool_call_budget:
+    - 80
+    - 130
+- name: audit_guard
+  type: custom
+  module: ../../test_kit/plugins/audit_guard.py
+  class: AuditGuardPlugin
+  audit_path: .kohaku/audit/audit-guard.jsonl
+  tracked_tools:
+  - edit
+  - cli_invoke
+- name: permgate
+  options:
+    gated_tools:
+    - edit
+    - cli_invoke
+    allowlist:
+    - read
+    - glob
+    - grep
+    - json_read
+    - result_feedback
+    - stop_task
+    timeout_s:
+    surface: modal
 tools:
 - name: read
   type: builtin

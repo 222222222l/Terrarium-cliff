@@ -35,6 +35,16 @@ DEFAULT_SCRIPTS: tuple[VerifyScript, ...] = (
     VerifyScript("T8", SCRIPT_ROOT / "verify_t8_task_team_minimal.py"),
     VerifyScript("T9-T10", SCRIPT_ROOT / "verify_t9_t10_protocol_skills.py"),
     VerifyScript(
+        "T12",
+        SCRIPT_ROOT / "verify_t12_memory_schema.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
+    VerifyScript("T11-T14", SCRIPT_ROOT / "verify_t11_t14_memory_learning.py"),
+    VerifyScript("T15", SCRIPT_ROOT / "verify_t15_approval_gate.py"),
+    VerifyScript("T16", SCRIPT_ROOT / "verify_t16_budget_policy.py"),
+    VerifyScript("T17", SCRIPT_ROOT / "verify_t17_audit_guard.py"),
+    VerifyScript("T18-T19", SCRIPT_ROOT / "verify_t18_t19_evolver.py"),
+    VerifyScript(
         "T23",
         SCRIPT_ROOT / "verify_t23_silent_execution.py",
         ("--repo-root", str(PROJECT_ROOT)),
@@ -50,6 +60,31 @@ DEFAULT_SCRIPTS: tuple[VerifyScript, ...] = (
         ("--repo-root", str(PROJECT_ROOT)),
     ),
     VerifyScript("T30-T32", SCRIPT_ROOT / "verify_t30_t32_skill_packaging.py"),
+    VerifyScript(
+        "T33",
+        SCRIPT_ROOT / "verify_t33_capability_routing.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
+    VerifyScript(
+        "T35",
+        SCRIPT_ROOT / "verify_t35_package_governance.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
+    VerifyScript(
+        "T38",
+        SCRIPT_ROOT / "verify_t38_phase_usability.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
+    VerifyScript(
+        "T39",
+        SCRIPT_ROOT / "verify_t39_linux_windows_compatibility.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
+    VerifyScript(
+        "T40",
+        SCRIPT_ROOT / "verify_t40_package_install_readiness.py",
+        ("--repo-root", str(PROJECT_ROOT)),
+    ),
 )
 
 EXTERNAL_SCRIPTS: tuple[VerifyScript, ...] = (

@@ -11,6 +11,11 @@ This package is designed for fast iteration. Use the single creature for most
 experiments, and use the terrarium only when you need to validate multi-agent
 wiring.
 
+`test-kit` is currently a lab-stage package. Its distribution metadata lives in
+`kohaku.yaml`, and the release / rollback policy lives in `release-policy.yaml`.
+Use editable installs for local development; promote to git-tagged private
+releases only after the default verifier suite passes.
+
 ## 1. What This Solves
 
 This package exists to reduce the cost of answering these questions:
@@ -26,19 +31,29 @@ This package exists to reduce the cost of answering these questions:
 examples/test-kit/
   kohaku.yaml
   README.md
+  release-policy.yaml
   creatures/
     lab-runner/
     root-privileged/
     coordinator/
     worker-base/
     critic/
+    curator/
+    evolver/
   skills/
     provider-aware-cli-builder/
   skill-policies/
     creature-creation/
+  governance-policies/
+    approval-gate.yaml
+  memory-schema/
+    schema.yaml
+  evolution-schema/
+    draft-protocol.yaml
   terrariums/
     lab-smoke/
     task-team-minimal/
+    task-team-learning/
   test_kit/
     tools/
       lab_report.py
@@ -82,8 +97,8 @@ workflow rather than only a smoke shell.
 For scripted validation of the reusable long-link control layer, use:
 
 ```bash
-python .\examples\test-kit\scripts\run_t8_worker_shortest_demo.py
-python .\examples\test-kit\scripts\run_t8_full_demo_stable.py
+python ./examples/test-kit/scripts/run_t8_worker_shortest_demo.py
+python ./examples/test-kit/scripts/run_t8_full_demo_stable.py
 ```
 
 The current long-link runtime contract is:
@@ -157,6 +172,36 @@ The package also ships a control-plane root template:
 - `root-privileged`: user-facing privileged root for terrarium orchestration
 - designed to inspect topology first, reuse existing nodes, and avoid doing
   worker execution itself
+
+The package also ships a memory schema contract:
+
+- `memory-schema/schema.yaml`: layered user/project/workspace/session memory
+  schema for future curator and memory-curation work
+- designed to keep `.kohakutr` as operational history while long-term memory
+  stores only curated durable assets
+
+The package also ships a low-frequency learning path:
+
+- `memory-curation`: skill for classifying, deduplicating, retaining, and
+  promoting memory records
+- `curator`: creature template that applies the memory schema after task review
+- `task-team-learning`: terrarium that keeps the execution chain separate from
+  the learning branch
+
+The package also ships governance policies:
+
+- `governance-policies/approval-gate.yaml`: project approval policy that
+  scopes the built-in `permgate` plugin for worker and curator risk points
+- `governance-policies/budget-policy.yaml`: role-specific budget policy that
+  scopes the built-in `budget` plugin for root, coordinator, worker, critic,
+  and curator
+- `governance-policies/audit-guard.yaml`: audit policy for critical tool calls
+  and evolution-related changes
+
+The package also ships a controlled evolution path:
+
+- `evolution-draft-protocol`: skill for source-backed, approval-aware, rollback-ready proposals
+- `evolver`: draft-only creature that can propose changes but cannot apply them
 
 It also ships a lightweight routing template:
 
@@ -237,7 +282,7 @@ After adding a new custom tool or new default option, write the defaults back to
 every personalized creature config with:
 
 ```bash
-python .\examples\test-kit\scripts\sync_test_kit_module_configs.py
+python ./examples/test-kit/scripts/sync_test_kit_module_configs.py
 ```
 
 This keeps module configuration editable in `config.yaml` instead of hiding it
@@ -271,13 +316,13 @@ Mounted defaults:
 Static verification:
 
 ```bash
-python .\examples\test-kit\scripts\verify_t9_t10_protocol_skills.py
+python ./examples/test-kit/scripts/verify_t9_t10_protocol_skills.py
 ```
 
 Real long-context demo:
 
 ```bash
-python .\examples\test-kit\scripts\run_t9_t10_long_protocol_demo.py
+python ./examples/test-kit/scripts/run_t9_t10_long_protocol_demo.py
 ```
 
 The demo compares:
@@ -294,17 +339,49 @@ Use the stable offline suite before changing `test-kit` templates, tools, or
 protocol skills:
 
 ```bash
-python .\examples\test-kit\scripts\verify_regression_suite.py
+python ./examples/test-kit/scripts/verify_regression_suite.py
 ```
 
-The default suite covers `T4-T10`, `T23-T25`, and `T30-T32`. It avoids external
+The default suite covers `T4-T19`, `T23-T25`, `T30-T33`, `T35`, and `T38-T40`. It avoids external
 checkout dependencies and is also guarded by `tests/unit/test_test_kit_verify_suite.py`.
 
 To include verifiers that require sibling reference checkouts, run:
 
 ```bash
-python .\examples\test-kit\scripts\verify_regression_suite.py --include-external
+python ./examples/test-kit/scripts/verify_regression_suite.py --include-external
 ```
+
+### Phase usability smoke
+
+Use the phase usability gate when you want to confirm the current blueprint
+stage is still ready for manual or live-provider validation:
+
+```bash
+python ./examples/test-kit/scripts/verify_t38_phase_usability.py --repo-root .
+```
+
+This check is offline by default. For a live OpenAI-compatible provider, set
+`TASK_TEAM_BASE_URL`, `TASK_TEAM_API_KEY`, and `TASK_TEAM_MODEL` only in the
+current shell, then run `run_t8_role_direct.py`. Keep full worker tool-chain
+smoke tests separate because `cli_invoke` is approval-gated.
+
+PowerShell uses `$env:TASK_TEAM_API_KEY = "..."`; Bash uses
+`export TASK_TEAM_API_KEY="..."`. Test-kit command examples and verifiers should
+stay Linux / Windows compatible unless a task is explicitly platform-specific.
+
+### Package install readiness
+
+Use the install-readiness gate before promoting `test-kit` from local editable
+work into a private release:
+
+```bash
+python ./examples/test-kit/scripts/verify_t40_package_install_readiness.py --repo-root .
+```
+
+This is an offline manifest check. It verifies that every creature, terrarium,
+skill, tool, and plugin declared in `kohaku.yaml` resolves to a real
+package-relative file, and that `release-checklist.yaml` keeps regression,
+Linux / Windows compatibility, release notes, and rollback requirements visible.
 
 ### Swap plugins
 

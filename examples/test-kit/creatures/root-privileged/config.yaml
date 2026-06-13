@@ -14,6 +14,15 @@ input:
 output:
   type: stdout
   controller_direct: true
+plugins:
+- name: budget
+  options:
+    turn_budget:
+    - 80
+    - 120
+    tool_call_budget:
+    - 120
+    - 180
 tools:
 - name: scratchpad
   type: builtin

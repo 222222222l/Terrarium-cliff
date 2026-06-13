@@ -18,13 +18,23 @@ def execute_cli_invocation(
 ) -> dict[str, Any]:
     command = _normalize_command(invocation)
 
-    provider_name = str(invocation.get("provider_name", "cli-anything")).strip() or "cli-anything"
-    capability = str(invocation.get("capability", "")).strip() or _infer_capability(invocation, command)
-    task_id = str(invocation.get("task_id", "")).strip() or _default_task_id(provider_name)
-    token_budget_mode = str(invocation.get("token_budget_mode", "silent")).strip() or "silent"
+    provider_name = (
+        str(invocation.get("provider_name", "cli-anything")).strip() or "cli-anything"
+    )
+    capability = str(invocation.get("capability", "")).strip() or _infer_capability(
+        invocation, command
+    )
+    task_id = str(invocation.get("task_id", "")).strip() or _default_task_id(
+        provider_name
+    )
+    token_budget_mode = (
+        str(invocation.get("token_budget_mode", "silent")).strip() or "silent"
+    )
     timeout_s = int(invocation.get("timeout_s", 60) or 60)
     expected_artifacts = _normalize_string_list(invocation.get("artifact_expectation"))
-    provider_detect_cmd = str(invocation.get("provider_detect_cmd", "")).strip() or _default_detect_cmd(command)
+    provider_detect_cmd = str(
+        invocation.get("provider_detect_cmd", "")
+    ).strip() or _default_detect_cmd(command)
     env_overrides = invocation.get("env") or {}
     if env_overrides and not isinstance(env_overrides, dict):
         raise ValueError("env must be a mapping of environment variables")
@@ -53,7 +63,9 @@ def execute_cli_invocation(
     )
 
     start = time.perf_counter()
-    _append_event(raw_log_path, {"event": "start", "command": command, "ts": time.time()})
+    _append_event(
+        raw_log_path, {"event": "start", "command": command, "ts": time.time()}
+    )
 
     if provider_detect_cmd and not _is_command_available(provider_detect_cmd):
         duration_ms = int((time.perf_counter() - start) * 1000)
@@ -77,7 +89,10 @@ def execute_cli_invocation(
         }
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text(record["stderr_summary"] + "\n", encoding="utf-8")
-        _append_event(raw_log_path, {"event": "finish", "status": "provider_unavailable", "ts": time.time()})
+        _append_event(
+            raw_log_path,
+            {"event": "finish", "status": "provider_unavailable", "ts": time.time()},
+        )
         _write_record(result_path, record)
         return record
 
@@ -102,7 +117,9 @@ def execute_cli_invocation(
 
         artifact_paths = _resolve_existing_artifacts(working_dir, expected_artifacts)
         missing_artifacts = [
-            str((working_dir / path).resolve()) for path in expected_artifacts if not (working_dir / path).exists()
+            str((working_dir / path).resolve())
+            for path in expected_artifacts
+            if not (working_dir / path).exists()
         ]
         success = completed.returncode == 0 and not missing_artifacts
         error_kind = None
@@ -115,7 +132,9 @@ def execute_cli_invocation(
             retryable = True
         elif missing_artifacts:
             error_kind = "artifact_missing"
-            diagnostic_excerpt = f"missing artifacts: {', '.join(missing_artifacts[:3])}"
+            diagnostic_excerpt = (
+                f"missing artifacts: {', '.join(missing_artifacts[:3])}"
+            )
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         record = {
@@ -171,7 +190,9 @@ def execute_cli_invocation(
             "stderr_path": str(stderr_path),
             "result_path": str(result_path),
         }
-        _append_event(raw_log_path, {"event": "finish", "status": "timeout", "ts": time.time()})
+        _append_event(
+            raw_log_path, {"event": "finish", "status": "timeout", "ts": time.time()}
+        )
         _write_record(result_path, record)
         return record
 
@@ -212,7 +233,7 @@ def _normalize_string_list(value: Any) -> list[str]:
 def _normalize_command(invocation: dict[str, Any]) -> list[str]:
     url = str(invocation.get("url", "") or "").strip()
     if url:
-        return ["curl.exe", url]
+        return [_curl_binary(), url]
 
     raw = invocation.get("command")
     if isinstance(raw, list):
@@ -232,17 +253,19 @@ def _normalize_command(invocation: dict[str, Any]) -> list[str]:
         if command:
             return _normalize_command_binary(command)
 
-    raise ValueError(
-        "provide one of: url, command_text, or command"
-    )
+    raise ValueError("provide one of: url, command_text, or command")
 
 
 def _normalize_command_binary(command: list[str]) -> list[str]:
     if not command:
         return command
-    if command[0] == "curl":
-        command[0] = "curl.exe"
+    if command[0].lower() in {"curl", "curl.exe"}:
+        command[0] = _curl_binary()
     return command
+
+
+def _curl_binary() -> str:
+    return "curl.exe" if os.name == "nt" else "curl"
 
 
 def _infer_capability(invocation: dict[str, Any], command: list[str]) -> str:
@@ -259,7 +282,9 @@ def _default_detect_cmd(command: list[str]) -> str:
     return command[0]
 
 
-def _resolve_existing_artifacts(working_dir: Path, expected_artifacts: list[str]) -> list[str]:
+def _resolve_existing_artifacts(
+    working_dir: Path, expected_artifacts: list[str]
+) -> list[str]:
     results: list[str] = []
     for raw_path in expected_artifacts:
         path = (working_dir / raw_path).resolve()
@@ -274,7 +299,9 @@ def _append_event(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _write_record(path: Path, record: dict[str, Any]) -> None:
-    path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
 
 
 def _summarize_stream(text: str, max_chars: int = 180) -> str:

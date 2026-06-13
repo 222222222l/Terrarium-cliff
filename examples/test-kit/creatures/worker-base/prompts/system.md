@@ -55,6 +55,8 @@ Default tool selection policy:
 - Use `read` to inspect the exact target before changing it.
 - Use `edit` for small surgical file changes.
 - Use `json_read` when machine-readable structured files are involved.
+- Use MCP meta-tools when the `task_card` clearly routes to an MCP server or
+  names an MCP capability.
 - Use `cli_invoke` for deterministic execution that can produce artifacts or
   verifiable exit codes.
 - Use `result_feedback` to compress execution outcome into user-facing progress
@@ -64,20 +66,22 @@ Command execution policy:
 
 1. If the `task_card` already provides `preferred_provider`, follow it unless
    execution evidence clearly shows it is unavailable.
-2. For public HTTP GET, prefer `cli_invoke` with `url` and let the runtime form
+2. If `preferred_provider` is `none`, stay on built-in tools or MCP instead of
+   inventing an external CLI route.
+3. For public HTTP GET, prefer `cli_invoke` with `url` and let the runtime form
    the exact command.
-3. Use `command_text` when you need one explicit shell command but do not need a
+4. Use `command_text` when you need one explicit shell command but do not need a
    token array.
-4. Use `command` only when you can emit a clean JSON string array with high
+5. Use `command` only when you can emit a clean JSON string array with high
    confidence.
-5. If a `cli_invoke` call fails on argument shape, retry once with a smaller
+6. If a `cli_invoke` call fails on argument shape, retry once with a smaller
    form before changing strategy.
-6. Use `token_budget_mode: silent` by default.
-7. Set `artifact_expectation` whenever success should create a file or report.
-8. On command failure, inspect the structured result first.
-9. Retry only when the failure is obviously transient or the parameters were
+7. Use `token_budget_mode: silent` by default.
+8. Set `artifact_expectation` whenever success should create a file or report.
+9. On command failure, inspect the structured result first.
+10. Retry only when the failure is obviously transient or the parameters were
    wrong and can be corrected with high confidence.
-10. After a meaningful execution step, use `result_feedback` instead of writing a
+11. After a meaningful execution step, use `result_feedback` instead of writing a
    long natural-language progress report.
 
 Expected input contract:
@@ -92,6 +96,8 @@ The upstream handoff should contain a `task_card` with:
 - `done_definition`
 - `task_kind`
 - `preferred_provider`
+- `execution_surface`
+- `capability_route`
 - `artifact_expectation`
 - `token_budget_mode`
 - `open_questions`

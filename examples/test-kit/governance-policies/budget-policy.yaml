@@ -1,0 +1,54 @@
+version: 1
+name: budget-policy
+status: active-policy
+description: Role-specific runtime budget policy using the built-in budget plugin.
+
+builtin_plugin:
+  name: budget
+  rationale: Reuse the framework turn/tool/walltime budget engine instead of implementing a project-local counter.
+  required_options:
+    - turn_budget
+    - tool_call_budget
+
+role_budgets:
+  root-privileged:
+    intent: User-facing orchestration can spend more turns, but should avoid heavy tool use.
+    turn_budget: [80, 120]
+    tool_call_budget: [120, 180]
+    walltime_budget:
+
+  coordinator:
+    intent: Task-card compilation should stay short and cheap.
+    turn_budget: [30, 45]
+    tool_call_budget: [30, 50]
+    walltime_budget:
+
+  worker-base:
+    intent: Bounded execution gets enough tool budget for verification but must not loop forever.
+    turn_budget: [50, 80]
+    tool_call_budget: [80, 130]
+    walltime_budget:
+
+  critic:
+    intent: Review needs more reasoning than coordinator but fewer tool calls than worker.
+    turn_budget: [45, 70]
+    tool_call_budget: [60, 100]
+    walltime_budget:
+
+  curator:
+    intent: Low-frequency memory curation should remain compact and conservative.
+    turn_budget: [30, 50]
+    tool_call_budget: [50, 80]
+    walltime_budget:
+
+budget_rules:
+  - Use soft limits as warning thresholds and hard limits as execution walls.
+  - Prefer role-specific budgets over one global budget.
+  - Avoid walltime budgets unless a workflow has real-time cost pressure.
+  - Keep approval gates independent from budget gates.
+  - If a hard wall is reached, return the smallest resumable blocker.
+
+fallback_behavior:
+  missing_plugin: Run without budget enforcement but keep prompts and docs conservative.
+  hard_wall: Stop the action and report the exhausted axis.
+  soft_alarm: Continue only with smaller tool batches or a user-approved scope change.

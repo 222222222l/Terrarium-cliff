@@ -27,7 +27,9 @@ def _load_resolve_role_llm_settings():
         import importlib.util
         import sys
 
-        module_path = PROJECT_ROOT / "examples" / "test-kit" / "test_kit" / "role_llm.py"
+        module_path = (
+            PROJECT_ROOT / "examples" / "test-kit" / "test_kit" / "role_llm.py"
+        )
         module_name = "test_kit.role_llm"
         spec = importlib.util.spec_from_file_location(module_name, module_path)
         if spec is None or spec.loader is None:
@@ -50,14 +52,14 @@ def _build_task_card(code: str) -> str:
         "  - 必须包含实时或最近收盘价格、涨跌幅、成交量等核心行情数据。\n"
         "  - 优先使用最小可行的公开 HTTP GET 获取路径。\n"
         "inputs:\n"
-        f"  stock_code: \"{code}\"\n"
+        f'  stock_code: "{code}"\n'
         f"  quote_url: \"https://qt.gtimg.cn/q={'sh' + code if code.startswith('6') else 'sz' + code}\"\n"
         "deliverable: 包含行情数据、简要分析及投资建议的文本报告。\n"
         "evidence_needed: 调用的 API 原始数据摘要或查询日志。\n"
         "done_definition: 报告中包含明确的行情数据，且分析逻辑与数据一致。\n"
         "task_kind: service_cli_task\n"
         "preferred_provider: cli-anything\n"
-        "artifact_expectation: \"\"\n"
+        'artifact_expectation: ""\n'
         "token_budget_mode: silent\n"
         "open_questions: []\n"
         "\n"
@@ -85,13 +87,18 @@ def _last_message_text(history: dict[str, Any]) -> str:
 def _assistant_count(history: dict[str, Any]) -> int:
     count = 0
     for message in history.get("messages") or []:
-        if isinstance(message, dict) and str(message.get("role", "")).lower() == "assistant":
+        if (
+            isinstance(message, dict)
+            and str(message.get("role", "")).lower() == "assistant"
+        ):
             count += 1
     return count
 
 
 def _extract_first_fenced_block(text: str) -> str:
-    match = re.search(r"```(?:yaml|yml|md|markdown)?\s*\n([\s\S]*?)\n```", text, re.IGNORECASE)
+    match = re.search(
+        r"```(?:yaml|yml|md|markdown)?\s*\n([\s\S]*?)\n```", text, re.IGNORECASE
+    )
     if match:
         return match.group(1).strip()
     return text.strip()
@@ -125,7 +132,11 @@ def _result_path_from_turn_result(turn_result: dict[str, Any]) -> Path | None:
 
 
 def _existing_result_paths() -> set[str]:
-    return {str(path.resolve()) for path in CLI_RUNS_DIR.glob("*/result.json") if path.exists()}
+    return {
+        str(path.resolve())
+        for path in CLI_RUNS_DIR.glob("*/result.json")
+        if path.exists()
+    }
 
 
 async def main() -> None:
@@ -153,18 +164,23 @@ async def main() -> None:
         )
 
         output_text = str(turn_result.get("output_text", "") or "")
-        execution_packet = _extract_first_fenced_block(output_text)
         result_path = _result_path_from_turn_result(turn_result)
         if result_path is None:
-            raise AssertionError("worker shortest-chain run did not surface a cli_invoke result_path in turn output")
+            raise AssertionError(
+                "worker shortest-chain run did not surface a cli_invoke result_path in turn output"
+            )
         invocation_path = result_path.with_name("invocation.json")
         if not invocation_path.exists():
-            raise AssertionError(f"worker shortest-chain run surfaced result_path without invocation.json: {result_path}")
+            raise AssertionError(
+                f"worker shortest-chain run surfaced result_path without invocation.json: {result_path}"
+            )
 
         invocation = json.loads(invocation_path.read_text(encoding="utf-8"))
         result = json.loads(result_path.read_text(encoding="utf-8"))
         stdout_text = Path(result["stdout_path"]).read_text(encoding="utf-8")
-        fresh_cli_result_produced = str(result_path.resolve()) not in result_paths_before
+        fresh_cli_result_produced = (
+            str(result_path.resolve()) not in result_paths_before
+        )
         worker_history = (
             {"messages": [{"role": "assistant", "content": output_text}]}
             if output_text
@@ -194,17 +210,33 @@ async def main() -> None:
 
         print(f"[shortest] code={code}")
         print(f"[shortest] result_path={result_path}")
-        print(f"[shortest] success={result.get('success')} exit_code={result.get('exit_code')}")
+        print(
+            f"[shortest] success={result.get('success')} exit_code={result.get('exit_code')}"
+        )
         print(f"[shortest] command={invocation.get('command')}")
         print(f"[shortest] stdout_summary={result.get('stdout_summary')}")
 
-        assert fresh_cli_result_produced is True, "shortest-chain run reused an old cli result instead of producing a fresh one"
-        assert result.get("success") is True, f"cli_invoke did not succeed: {result_path}"
-        assert result.get("exit_code") == 0, f"cli_invoke exit code was not 0: {result_path}"
-        assert f"~{code}~" in stdout_text, "quote payload does not contain the requested stock code"
-        assert invocation.get("command") == ["curl.exe", f"https://qt.gtimg.cn/q=sh{code}"] or invocation.get(
-            "command"
-        ) == ["curl.exe", f"https://qt.gtimg.cn/q=sz{code}"], "unexpected cli_invoke command"
+        assert (
+            fresh_cli_result_produced is True
+        ), "shortest-chain run reused an old cli result instead of producing a fresh one"
+        assert (
+            result.get("success") is True
+        ), f"cli_invoke did not succeed: {result_path}"
+        assert (
+            result.get("exit_code") == 0
+        ), f"cli_invoke exit code was not 0: {result_path}"
+        assert (
+            f"~{code}~" in stdout_text
+        ), "quote payload does not contain the requested stock code"
+        command = invocation.get("command") or []
+        assert command[:1] in (
+            ["curl"],
+            ["curl.exe"],
+        ), f"unexpected cli_invoke binary: {command}"
+        assert command[1:] in (
+            [f"https://qt.gtimg.cn/q=sh{code}"],
+            [f"https://qt.gtimg.cn/q=sz{code}"],
+        ), f"unexpected cli_invoke URL: {command}"
     finally:
         await service.shutdown()
 

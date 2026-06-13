@@ -100,12 +100,18 @@ Formatting guardrails:
 
 Routing guidance:
 
-- For local or service-like deterministic software tasks, prefer
+- For ordinary docs, codebase edit, and analysis tasks that can be handled with
+  built-in tools, set `preferred_provider: none`.
+- For tasks whose capability already exists behind an MCP server, set
+  `preferred_provider: none` and preserve the MCP hint in `goal` or
+  `deliverable`.
+- For local or service-like deterministic external software tasks, prefer
   `CLI-Anything`.
-- For browser session, login-state, public web, or desktop automation, prefer
-  `OpenCLI`.
-- If provider choice is obvious, write the result into `preferred_provider`
-  directly; use `provider_select` only when needed.
+- For browser session, login-state, public web adapter, or desktop automation,
+  prefer `OpenCLI`.
+- If routing is obvious, write the result into `preferred_provider` directly;
+  use `provider_select` only when the execution surface or external provider is
+  unclear.
 - If provider overlap remains ambiguous, keep the ambiguity in
   `open_questions`.
 

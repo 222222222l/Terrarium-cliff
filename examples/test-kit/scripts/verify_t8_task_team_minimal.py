@@ -16,7 +16,9 @@ def load_yaml(path: Path) -> dict:
 def main() -> None:
     manifest = load_yaml(ROOT / "kohaku.yaml")
     terrariums = manifest.get("terrariums", [])
-    terrarium_names = [entry["name"] if isinstance(entry, dict) else entry for entry in terrariums]
+    terrarium_names = [
+        entry["name"] if isinstance(entry, dict) else entry for entry in terrariums
+    ]
     assert "task-team-minimal" in terrarium_names, terrarium_names
 
     recipe_path = ROOT / "terrariums" / "task-team-minimal" / "terrarium.yaml"
@@ -27,7 +29,10 @@ def main() -> None:
     root_cfg = recipe.get("root", {})
     assert root_cfg.get("name") == "root"
     assert root_cfg.get("base_config") == "../../creatures/root-privileged/"
-    assert root_cfg.get("controller", {}).get("model") == "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+    assert (
+        root_cfg.get("controller", {}).get("model")
+        == "${TASK_TEAM_MODEL:gemini-3-flash-preview}"
+    )
 
     creatures = {entry["name"]: entry for entry in recipe.get("creatures", [])}
     assert set(creatures) == {"coordinator", "worker", "critic"}, set(creatures)
@@ -37,16 +42,18 @@ def main() -> None:
     assert creatures["critic"].get("output_wiring") == [{"to": "root"}]
 
     for prompt_name in ["root", "coordinator", "worker", "critic"]:
-        prompt_path = ROOT / "terrariums" / "task-team-minimal" / "prompts" / f"{prompt_name}.md"
+        prompt_path = (
+            ROOT / "terrariums" / "task-team-minimal" / "prompts" / f"{prompt_name}.md"
+        )
         assert prompt_path.is_file(), prompt_path
 
-    worker_prompt = (ROOT / "terrariums" / "task-team-minimal" / "prompts" / "worker.md").read_text(
-        encoding="utf-8"
-    )
+    worker_prompt = (
+        ROOT / "terrariums" / "task-team-minimal" / "prompts" / "worker.md"
+    ).read_text(encoding="utf-8")
     for snippet in [
         "execution_packet",
         "cli_invoke",
-        "curl.exe",
+        "platform curl binary",
         "stock snapshot request",
     ]:
         assert snippet in worker_prompt, snippet

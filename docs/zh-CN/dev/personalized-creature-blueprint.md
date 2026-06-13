@@ -187,7 +187,7 @@ tags:
 6. **分发语义仍停留在实验包**：`examples/test-kit` 作为实验资产合理，但若长期承载模板生态，会混淆“测试样板”和“可安装模板包”的边界；需要在 `T35` 中明确私有发布、版本、回滚与从实验包晋升到正式包的条件。
 
 优化后的推进顺序如下：
-- **P0：先稳住可持续性**：优先完成 `T34`，把关键验证脚本纳入一键回归；同时推进 `T33`，把第 8 节能力路由从文档策略落实到 coordinator / worker-base 的可执行选择规则。
+- **P0：先稳住可持续性**：`T34` 已把关键验证脚本纳入一键回归；`T33` 已把第 8 节能力路由从文档策略落实到 coordinator / worker-base 的可执行选择规则。
 - **P1：补齐分发与记忆前置设计**：推进 `T35` 和 `T12`。先定义 package / marketplace 治理与 memory schema，再写 `memory-curation` skill。
 - **P2：实现低频学习与治理插件**：在 schema 稳定后做 `T11-T14`，并用 2.0 内置 `permgate`、`budget`、`sandbox` 补 `T15-T17`。
 - **P3：最后做可控演化**：只有在回归、分发、记忆、审批、审计都可用后，才推进 `T18-T19`。`evolver` 只能产出草案，不能直接修改正式模板。
@@ -242,13 +242,20 @@ tags:
   - 交付物：目录规范、命名规范、模板继承规范
   - 完成标准：新增 creature / skill / plugin 时不需要重新讨论目录形态
   - 备注：规范文档见 `docs/zh-CN/dev/package-naming-conventions.md`
-- [ ] `T35` 定义 package / marketplace 发布与版本治理策略
-  - 状态：待开始
+- [x] `T35` 定义 package / marketplace 发布与版本治理策略
+  - 状态：已完成
   - 解决问题：私有模板体系缺少可发布、可升级、可回滚的分发生命周期设计
   - 适合模块：`package` + `marketplace` + `docs`
   - 交付物：来源策略、版本策略、editable 开发策略、回滚策略
   - 完成标准：本地开发、私有发布、后续升级三条路径都被明确描述
-  - 备注：下一轮优先级升为 `P1`；需要明确 `examples/test-kit` 继续作为实验包的边界，以及何时拆出或晋升为可安装的正式模板包
+  - 备注：已新增 `docs/zh-CN/dev/t35-package-marketplace-governance.md`、`examples/test-kit/release-policy.yaml` 与 `kohaku.yaml` 的 `distribution` 元数据，明确 `test-kit` 当前仍是 `lab / experimental` 实验包，不直接进入 marketplace；已把本地 editable、私有 git release、marketplace candidate 三条路径的发布门槛、版本策略与回滚方式写入可验证策略，并通过 `verify_t35_package_governance.py` 纳入默认回归。
+- [x] `T40` 建立 package 安装就绪门禁
+  - 状态：已完成
+  - 解决问题：T35 已定义发布治理，但 `kohaku.yaml` 中声明的 creature / terrarium / skill / tool / plugin 是否都能解析到真实文件仍缺少统一检查
+  - 适合模块：`package` + `scripts` + `docs`
+  - 交付物：manifest 引用解析验证、私有发布 checklist、安装就绪说明文档
+  - 完成标准：package manifest 中公开的资源没有悬空引用；路径保持相对与双端友好；私有发布前明确默认回归、T39 双端门禁、release notes 与 rollback 要求
+  - 备注：已新增 `examples/test-kit/release-checklist.yaml`、`examples/test-kit/scripts/verify_t40_package_install_readiness.py` 与 `docs/zh-CN/dev/t40-package-install-readiness.md`，并纳入默认回归；该门禁只做离线 manifest 自洽检查，不把真实 `kt install`、网络或全局 package cache 状态放入默认套件。
 
 ### 任务组 C. 主工作流模板
 - [x] `T4` 实现 `root-privileged` 模板
@@ -316,13 +323,13 @@ tags:
   - 交付物：review checklist 与输出协议
   - 完成标准：`critic` 输出可预测、可机器读取
   - 备注：已新增 `examples/test-kit/skills/review-protocol/SKILL.md`，在 package manifest 中发布，并通过 `critic` 的 `skills:` 显式挂载；长反馈 demo 会同时比较基线与 skill 注入版的反馈覆盖差异。当前多轮结果表明其结构稳定，但净收益波动较大：历史上曾稳定补出 `freshness_gap`，近期样本里则出现与基线持平甚至略弱于基线的情况。因此已先按奥卡姆原则收缩 skill 文本以降低注入成本；后续若继续优化，应优先聚焦 freshness gap 的稳定触发，而不是继续扩充协议厚度。
-- [ ] `T11` 实现 `memory-curation` skill
-  - 状态：待开始
+- [x] `T11` 实现 `memory-curation` skill
+  - 状态：已完成
   - 解决问题：memory 整理策略缺少统一流程
   - 适合模块：`skill`
   - 交付物：memory 分类、升级、压缩、归档规范
   - 完成标准：`curator` 可按统一规则沉淀长期记忆
-  - 备注：不得早于 `T12` 落地；先稳定 schema，再写 skill，避免把字段结构硬编码进 prompt
+  - 备注：已在 `T12` schema 稳定后新增 `examples/test-kit/skills/memory-curation/SKILL.md`，只定义整理流程、层级分类、来源/置信度/保留期/去重步骤与 `curation_result` 输出契约，不承载 Python 逻辑，也不替代 schema 字段定义。
 - [x] `T30` 迁移 CLI 创建类 skill 到 2.0 原生发现路径
   - 状态：已完成
   - 解决问题：当前 `.trae/skills/` 在 2.0 下不会被框架发现，历史设计实际上未生效
@@ -339,62 +346,66 @@ tags:
   - 备注：已将策略索引迁入 `examples/test-kit/skill-policies/creature-creation/`，并让 `lab-runner` 用 `skills: [provider-aware-cli-builder]` 做真实 opt-in 示例
 
 ### 任务组 E. 记忆治理层
-- [ ] `T12` 设计 memory schema
-  - 状态：待开始
+- [x] `T12` 设计 memory schema
+  - 状态：已完成
   - 解决问题：用户偏好、项目约束、工作区资产、一次性上下文混在一起，难以维护
   - 适合模块：`memory` + `docs`
   - 交付物：分层文件结构、字段建议、scope 规则
   - 完成标准：至少区分用户偏好、项目规则、工作区资产、任务归档、临时上下文
-  - 备注：下一轮优先级升为 `P1`；需与 2.0 的 identity / session 边界保持一致，并先定义去重、置信度、保留期与来源字段
-- [ ] `T13` 实现 `curator` 模板
-  - 状态：待开始
+  - 备注：已新增 `examples/test-kit/memory-schema/schema.yaml` 与 `docs/zh-CN/dev/t12-memory-schema.md`，明确 session store 仍是运行时事实源，长期 memory 只保存治理后的用户偏好、项目规则、工作区资产、任务归档与临时上下文；schema 已包含 source、source_ref、confidence、retention、dedupe_key、status、identity boundaries、去重策略、保留期与晋升规则，并通过 `verify_t12_memory_schema.py` 纳入默认回归。
+- [x] `T13` 实现 `curator` 模板
+  - 状态：已完成
   - 解决问题：session 记录强，但缺少把历史转成长期资产的治理者
   - 适合模块：`creature` + `memory` + `subagent`
   - 交付物：模板 config、memory 读写流程、整理触发条件
   - 完成标准：任务结束后可稳定归档、压缩、去重
-- [ ] `T14` 实现 `task-team-learning` terrarium
-  - 状态：待开始
+  - 备注：已新增 `examples/test-kit/creatures/curator/`，显式挂载 `memory-curation`，读取 `memory-schema/schema.yaml`，并限制为低频记忆治理角色；工具面包含 read/write/edit/grep/json_read/result_feedback/lab_report，用于 schema 读取、memory 文件写入和紧凑反馈。
+- [x] `T14` 实现 `task-team-learning` terrarium
+  - 状态：已完成
   - 解决问题：主链完成任务后，缺少低频学习闭环的集成样板
   - 适合模块：`terrarium`
   - 交付物：含 `curator` 的学习型团队
   - 完成标准：执行与沉淀两个链路彼此解耦
-  - 备注：同样不得依赖旧版 channel `type` 语义
+  - 备注：已新增 `examples/test-kit/terrariums/task-team-learning/`，主执行链保持 `coordinator -> worker -> critic -> root`，学习分支为 `critic -> curator -> root`；不依赖旧版 channel `type` 语义，并通过 `verify_t11_t14_memory_learning.py` 纳入默认回归。
 
 ### 任务组 F. 策略与治理插件
-- [ ] `T15` 对接 2.0 内置审批能力并封装 `approval-gate`
-  - 状态：待开始
+- [x] `T15` 对接 2.0 内置审批能力并封装 `approval-gate`
+  - 状态：已完成
   - 解决问题：高风险动作与演化提案缺少统一审批机制
   - 适合模块：内置 `permgate` + 项目级 `plugin`
   - 交付物：审批策略、元数据约定、拒绝反馈机制
   - 完成标准：危险动作和新规则启用前都能被确认
-  - 备注：不从零重复实现审批引擎，优先复用 2.0 内置能力
-- [ ] `T16` 对接 2.0 内置预算能力并封装 `budget-policy`
-  - 状态：待开始
+  - 备注：已新增 `examples/test-kit/governance-policies/approval-gate.yaml` 与 `docs/zh-CN/dev/t15-approval-gate.md`，复用 2.0 内置 `permgate`，不另写审批引擎；`worker-base` 对 `edit`、`cli_invoke` 启用审批，`curator` 对 `write`、`edit` 启用审批，策略文件定义危险动作类型、审批元数据与拒绝反馈，并通过 `verify_t15_approval_gate.py` 纳入默认回归。
+- [x] `T16` 对接 2.0 内置预算能力并封装 `budget-policy`
+  - 状态：已完成
   - 解决问题：多 agent 系统的 token、turn、tool 成本难控
   - 适合模块：内置 `budget` + 项目级 `plugin`
   - 交付物：按角色区分的预算策略与推荐配置
   - 完成标准：`root`、`worker`、`critic`、`curator` 可配置不同预算
-  - 备注：不从零重写预算框架，优先做项目层策略封装
-- [ ] `T17` 实现 `audit-guard` plugin
-  - 状态：待开始
+  - 备注：已新增 `examples/test-kit/governance-policies/budget-policy.yaml` 与 `docs/zh-CN/dev/t16-budget-policy.md`，复用 2.0 内置 `budget`，不重写预算引擎；`root-privileged`、`coordinator`、`worker-base`、`critic`、`curator` 均已挂载角色级 turn/tool-call 预算，worker 与 curator 同时保留 `permgate`，并通过 `verify_t16_budget_policy.py` 纳入默认回归。
+- [x] `T17` 实现 `audit-guard` plugin
+  - 状态：已完成
   - 解决问题：个性化与演化行为如果不可审计，后续会变成黑箱
   - 适合模块：`plugin`
   - 交付物：操作日志、草案来源、变更记录
   - 完成标准：任何关键变更都能追溯来源
+  - 备注：已新增 `examples/test-kit/test_kit/plugins/audit_guard.py`、`examples/test-kit/governance-policies/audit-guard.yaml` 与 `docs/zh-CN/dev/t17-audit-guard.md`；插件通过 `post_tool_execute` 为关键工具写入短 JSONL 审计记录，worker 审计 `edit/cli_invoke`，curator 审计 `write/edit`，只记录 bounded summary，不保存完整原始日志，并通过 `verify_t17_audit_guard.py` 纳入默认回归。
 
 ### 任务组 G. 可控演化
-- [ ] `T18` 设计 evolver 草案协议
-  - 状态：待开始
+- [x] `T18` 设计 evolver 草案协议
+  - 状态：已完成
   - 解决问题：系统进化缺少标准提案格式，无法纳入审批流
   - 适合模块：`skill` + `docs`
   - 交付物：skill / prompt / rule 草案格式
   - 完成标准：提案至少包含来源、适用范围、风险、回滚方式
-- [ ] `T19` 实现 `evolver` 原型
-  - 状态：待开始
+  - 备注：已新增 `examples/test-kit/evolution-schema/draft-protocol.yaml`、`examples/test-kit/skills/evolution-draft-protocol/SKILL.md` 与 `docs/zh-CN/dev/t18-t19-evolver.md`，提案契约包含 source_refs、scope、risk_level、approval_required、audit_required、rollback_plan 与 status，并禁止 evolver 直接越过审批进入 approved/applied。
+- [x] `T19` 实现 `evolver` 原型
+  - 状态：已完成
   - 解决问题：反复纠正无法系统沉淀，个性化优化停留在人工修改
   - 适合模块：`creature`
   - 交付物：只生成草案的低频角色
   - 完成标准：能基于会话历史输出候选 skill / prompt patch，但不会自动生效
+  - 备注：已新增 `examples/test-kit/creatures/evolver/`，挂载 `evolution-draft-protocol`，仅提供 read/glob/grep/json_read/scratchpad/think/result_feedback/lab_report，不包含 write/edit，默认只能输出 `evolution_proposal` 或草案报告；通过 `verify_t18_t19_evolver.py` 纳入默认回归。
 
 ### 任务组 H. CLI 兼容与静默执行
 - [x] `T20` 设计外部 CLI 兼容抽象层
@@ -466,20 +477,34 @@ tags:
   - 交付物：清理后的 terrarium 样板与说明文档
   - 完成标准：不再依赖 `type` 字段表达队列语义，改用 `listen` / `can_send`、DM channel、output wiring 等真实机制
   - 备注：已清理 `examples/test-kit/terrariums/lab-smoke/terrarium.yaml` 中的 `type` 字段，并同步更新 `examples/test-kit/README.md`
-- [ ] `T33` 定义统一能力路由策略
-  - 状态：进行中
+- [x] `T33` 定义统一能力路由策略
+  - 状态：已完成
   - 解决问题：当前设计过度集中于 CLI 路线，尚未把 built-in tools、MCP、CLI provider 放进同一选路框架
   - 适合模块：`docs` + `coordinator` + `worker-base`
   - 交付物：能力选择顺序、冲突处理规则、失败升级规则
   - 完成标准：`coordinator` 可以按统一策略选择 built-in / MCP / `CLI-Anything` / `OpenCLI`
-  - 备注：第 8 节已有文档级策略，但尚未完成 coordinator / worker-base 的可执行规则与失败升级回归；下一轮优先级升为 `P0`
+  - 备注：已扩展 `provider_selection.py` 与 `provider_select`，把任务路由统一为 `built-in_tools`、`mcp`、`external_cli` 三类执行面，并保留旧版 `preferred_provider` 外部 CLI 兼容路径；已同步更新 coordinator / worker-base prompt，使 `preferred_provider: none` 明确表示内置工具或 MCP 路线；已新增 `verify_t33_capability_routing.py` 并纳入默认回归套件。
 - [x] `T34` 将 `verify_t2x_*.py` 纳入回归保护
   - 状态：已完成
   - 解决问题：当前验证脚本能跑，但没有进入稳定回归链路，后续容易被无意破坏
   - 适合模块：`tests` + `scripts` + `CI`
   - 交付物：统一入口脚本或 CI 配置
   - 完成标准：至少能在本地或 CI 一键执行已有关键验证
-  - 备注：已新增 `examples/test-kit/scripts/verify_regression_suite.py` 作为稳定离线统一入口，默认覆盖 `T4-T10`、`T23-T25`、`T30-T32`；`T21/T22` 依赖 sibling checkout，保留为 `--include-external` 可选项。已新增 `tests/unit/test_test_kit_verify_suite.py`，确保默认套件清单与离线执行能力进入单元回归。
+  - 备注：已新增 `examples/test-kit/scripts/verify_regression_suite.py` 作为稳定离线统一入口，默认覆盖 `T4-T19`、`T23-T25`、`T30-T33`、`T35` 与 `T38-T40`；`T21/T22` 依赖 sibling checkout，保留为 `--include-external` 可选项。已新增 `tests/unit/test_test_kit_verify_suite.py`，确保默认套件清单与离线执行能力进入单元回归。
+- [x] `T38` 建立阶段性可用性验证门禁
+  - 状态：已完成
+  - 解决问题：`T11-T19`、`T33`、`T35` 完成后，缺少一个“继续实装前当前阶段仍可用”的稳定验收入口
+  - 适合模块：`scripts` + `docs` + `tests`
+  - 交付物：离线阶段门禁脚本、实时 provider 冒烟说明、默认回归接入
+  - 完成标准：能确认默认回归覆盖、角色 LLM 环境变量覆盖、实时冒烟入口、审批门禁边界与完整工具链测试分离策略
+  - 备注：已新增 `examples/test-kit/scripts/verify_t38_phase_usability.py` 与 `docs/zh-CN/dev/t38-phase-usability-validation.md`，并纳入 `verify_regression_suite.py` 与 `tests/unit/test_test_kit_verify_suite.py`；实时 API 冒烟保留为手动可选步骤，不把临时 key 或外部网络依赖放进默认回归。
+- [x] `T39` 建立 Linux / Windows 双端兼容收口
+  - 状态：已完成
+  - 解决问题：`test-kit` 的 HTTP fetch、实时冒烟文档与部分 demo 仍带有 Windows-only `curl.exe` / PowerShell 假设，Linux 上会误失败或误导使用者
+  - 适合模块：`scripts` + `test_kit` + `docs` + `tests`
+  - 交付物：跨平台 curl 选择、双端验证脚本、PowerShell/Bash 文档示例、后续双端支持原则
+  - 完成标准：Windows 下继续使用 `curl.exe --ssl-no-revoke`，Linux/macOS 下使用 `curl`；验证脚本不再把 `curl.exe` 当作唯一正确命令；默认回归能检查双端命令规范化
+  - 备注：已新增 `examples/test-kit/scripts/verify_t39_linux_windows_compatibility.py` 与 `docs/zh-CN/dev/t39-linux-windows-compatibility.md`，并更新 `cli_runtime`、`role_llm`、T8 worker prompt、T8 demo 断言、T38 文档与单元测试；后续蓝图任务默认同时考虑 Linux / Windows，除非明确标注为单平台能力。
 
 ## 13. 每阶段验证方式
 ### 文档与基线阶段
@@ -510,10 +535,10 @@ tags:
 - 验证失败时只回传最小必要错误上下文，而不是完整过程日志。
 
 ## 14. 当前状态
-- 当前阶段：`Phase B` 已完成，正在进入 `Phase C/D` 前的 `P0` 收束阶段
-- 当前重点：`T34` 已完成，下一步轮到 `T33` 统一能力路由的可执行化
-- 当前下一步：`P0 = T33`；`P1 = T35 + T12`；随后再推进 `T11-T17`
-- 当前判断：入口控制面、任务编排层、执行骨架、结构化评审层、最小 terrarium、package skill 发现路径、可选 skill 规则、静默执行、barrier、模块自描述与关键验证回归入口已经建立。路线没有偏离最初目标，但如果继续优先优化 CLI / protocol 文本，会开始偏离；下一轮必须转向统一路由、发布治理和 memory schema
+- 当前阶段：`Phase B` 已完成，`Phase C/D` 前的 `P0` 收束项、`T38` 阶段性可用性门禁、`T39` Linux / Windows 双端兼容收口与 `T40` package 安装就绪门禁已经落地，等待验收
+- 当前重点：`T11-T19` 已完成，记忆治理、治理插件与可控演化草案链路已形成最小闭环；`T38` 已把继续实装前的阶段验收固化为默认回归项，`T39` 已把后续任务默认双端支持写入原则，`T40` 已把 T35 发布治理推进到 manifest 安装就绪检查
+- 当前下一步：`P1 = T29/T35 后续实装或 CLI/Studio/marketplace 更高层可用性验证`，根据验收决定
+- 当前判断：入口控制面、任务编排层、执行骨架、结构化评审层、最小 terrarium、package skill 发现路径、可选 skill 规则、静默执行、barrier、模块自描述、关键验证回归入口、统一能力路由、发布治理、安装就绪门禁、memory schema、低频学习闭环、审批 gate、预算策略、审计插件、可控演化草案协议、阶段性可用性门禁与 Linux / Windows 双端兼容原则已经建立。路线没有偏离最初目标；后续可以进入更高层实装，但每个任务仍应保持“一项完成后暂停验收”的节奏。
 
 ## 15. 更新规则
 后续每完成一项，必须同步更新本文件：
@@ -522,3 +547,4 @@ tags:
 3. 若实现路径与本蓝图不同，在任务备注中补一行“偏离原因”。
 4. 若是历史设计完成但 2.0 下仍未真实生效，不得直接记为 `已完成`，应先标 `待重构`。
 5. 若新增任务，放入对应阶段，不单独新建第二份 todo 文档。
+6. 后续任务默认同时考虑 Linux / Windows；文档命令、验证脚本、路径示例和外部二进制选择不得无说明地绑定单一平台。

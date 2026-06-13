@@ -50,12 +50,14 @@ def _is_retryable_transport_error(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.URLError):
         return True
     lowered = str(exc).lower()
-    return "timed out" in lowered or "connection reset" in lowered or "temporar" in lowered
+    return (
+        "timed out" in lowered or "connection reset" in lowered or "temporar" in lowered
+    )
 
 
 def _build_curl_command(url: str, api_key: str, payload_path: str) -> list[str]:
     command = [
-        "curl.exe",
+        _curl_binary(),
         "-sS",
         "-X",
         "POST",
@@ -74,6 +76,10 @@ def _build_curl_command(url: str, api_key: str, payload_path: str) -> list[str]:
         ]
     )
     return command
+
+
+def _curl_binary() -> str:
+    return "curl.exe" if os.name == "nt" else "curl"
 
 
 def resolve_role_llm_settings(env: Mapping[str, str] | None = None) -> RoleLlmSettings:
@@ -169,6 +175,12 @@ def call_role_llm(
                     capture_output=True,
                     text=False,
                 )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "role call failed after urllib fallback to curl. "
+                    f"Primary error: {primary_error_detail or '<none>'}. "
+                    f"curl executable not found: {command[0]}."
+                ) from exc
             except subprocess.CalledProcessError as exc:
                 stdout_text = _shorten(_decode_bytes(exc.stdout))
                 stderr_text = _shorten(_decode_bytes(exc.stderr))
@@ -194,5 +206,7 @@ def call_role_llm(
             except FileNotFoundError:
                 pass
     if "choices" not in body:
-        raise RuntimeError(f"role call did not return choices: {json.dumps(body, ensure_ascii=False)}")
+        raise RuntimeError(
+            f"role call did not return choices: {json.dumps(body, ensure_ascii=False)}"
+        )
     return str(body["choices"][0]["message"]["content"])

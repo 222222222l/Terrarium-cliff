@@ -1,0 +1,75 @@
+version: 1
+name: evolution-draft-protocol
+status: draft-contract
+description: Proposal-only protocol for controlled private ecosystem evolution.
+
+proposal_contract:
+  required_fields:
+    - proposal_id
+    - proposal_type
+    - scope
+    - source_refs
+    - problem
+    - proposed_change
+    - expected_benefit
+    - risk_level
+    - approval_required
+    - audit_required
+    - rollback_plan
+    - status
+  optional_fields:
+    - target_files
+    - validation_plan
+    - migration_notes
+    - supersedes
+    - owner
+    - review_after
+
+proposal_types:
+  - skill
+  - prompt
+  - policy
+  - memory-rule
+  - package-template
+  - terrarium-template
+
+scopes:
+  - user
+  - project
+  - workspace
+  - package
+  - creature
+  - terrarium
+
+status_flow:
+  - draft
+  - proposed
+  - approved
+  - rejected
+  - superseded
+  - applied
+  - rolled-back
+
+hard_rules:
+  - Evolver can only produce draft or proposed records.
+  - Evolver must not edit active prompts, skills, policies, or memory files directly.
+  - Any transition beyond proposed requires approval-gate.
+  - Any applied change requires audit-guard traceability.
+  - Rollback plan is mandatory for every proposal.
+
+risk_policy:
+  low:
+    examples:
+      - documentation wording improvement
+      - verifier-only coverage extension
+  medium:
+    examples:
+      - default skill attachment change
+      - role prompt adjustment
+  high:
+    examples:
+      - approval policy relaxation
+      - memory retention rule change
+      - active template behavior change
+
+output_contract_name: evolution_proposal

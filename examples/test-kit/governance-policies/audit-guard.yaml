@@ -1,0 +1,60 @@
+version: 1
+name: audit-guard
+status: active-policy
+description: Audit policy for critical actions and evolution-related changes.
+
+plugin:
+  name: audit_guard
+  module: test_kit.plugins.audit_guard
+  class: AuditGuardPlugin
+  default_audit_path: .kohaku/audit/audit-guard.jsonl
+
+tracked_action_classes:
+  - id: workspace-write
+    tools:
+      - write
+      - edit
+    required_trace:
+      - timestamp
+      - agent_name
+      - session_id
+      - tool_name
+      - job_id
+      - args_summary
+      - result_preview
+
+  - id: external-execution
+    tools:
+      - cli_invoke
+    required_trace:
+      - timestamp
+      - agent_name
+      - session_id
+      - tool_name
+      - job_id
+      - args_summary
+      - result_preview
+
+  - id: evolution-draft
+    tools:
+      - write
+      - edit
+    required_trace:
+      - proposal_id
+      - source_ref
+      - rollback_plan
+
+role_bindings:
+  worker-base:
+    tracked_tools:
+      - edit
+      - cli_invoke
+  curator:
+    tracked_tools:
+      - write
+      - edit
+
+retention:
+  audit_path: .kohaku/audit/audit-guard.jsonl
+  policy: project-lifetime
+  note: Keep short JSONL records only; do not store full raw logs.

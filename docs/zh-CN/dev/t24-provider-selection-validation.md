@@ -16,8 +16,16 @@ tags:
 
 运行命令：
 
+PowerShell:
+
 ```bash
 .\scripts\run-in-test-env.ps1 python .\examples\test-kit\scripts\verify_t24_provider_selection.py
+```
+
+Linux / macOS:
+
+```bash
+python ./examples/test-kit/scripts/verify_t24_provider_selection.py
 ```
 
 看什么输出：
@@ -39,8 +47,16 @@ tags:
 
 运行命令：
 
+PowerShell:
+
 ```bash
 .\scripts\run-in-test-env.ps1 kt run .\examples\test-kit\creatures\lab-runner
+```
+
+Linux / macOS:
+
+```bash
+kt run ./examples/test-kit/creatures/lab-runner
 ```
 
 建议输入：

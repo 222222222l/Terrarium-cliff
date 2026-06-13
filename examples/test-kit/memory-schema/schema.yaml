@@ -1,0 +1,206 @@
+version: 1
+name: private-ecosystem-memory-schema
+status: design-contract
+description: Layered memory schema for private creature templates.
+
+principles:
+  - Session stores remain the canonical operational history.
+  - Long-term memory stores curated facts, rules, assets, and task outcomes only.
+  - Every record carries source, confidence, retention, scope, and dedupe metadata.
+  - Transient context must expire or be promoted; it must not silently become durable memory.
+
+identity_boundaries:
+  user:
+    description: Applies across workspaces for one human or account namespace.
+    allowed_layers:
+      - user-preferences
+  project:
+    description: Applies to one repository or project root.
+    allowed_layers:
+      - project-rules
+      - workspace-assets
+      - task-archives
+  workspace:
+    description: Applies to one current working copy or local environment.
+    allowed_layers:
+      - workspace-assets
+      - transient-context
+  session:
+    description: Applies only to one .kohakutr session or active task graph.
+    allowed_layers:
+      - task-archives
+      - transient-context
+
+storage_layout:
+  root: memory/
+  layers:
+    user-preferences: user/preferences.yaml
+    project-rules: project/rules.yaml
+    workspace-assets: workspace/assets.yaml
+    task-archives: tasks/archive.yaml
+    transient-context: transient/context.yaml
+
+record_contract:
+  required_fields:
+    - id
+    - layer
+    - scope
+    - title
+    - content
+    - source
+    - source_ref
+    - confidence
+    - retention
+    - dedupe_key
+    - created_at
+    - updated_at
+    - status
+  optional_fields:
+    - tags
+    - applies_to
+    - expires_at
+    - supersedes
+    - related_records
+    - evidence
+    - owner
+    - review_after
+  field_rules:
+    id: stable kebab-case or uuid-like identifier unique within the layer
+    layer: one of the declared layer names
+    scope: user, project, workspace, or session
+    title: short human-readable label
+    content: concise durable fact, rule, asset summary, task result, or transient note
+    source: user, session, tool, file, mcp, web, inference, or curator
+    source_ref: path, session id, event id, URL, MCP server, or human note
+    confidence: float from 0.0 to 1.0
+    retention: permanent, until-changed, project-lifetime, task-lifetime, or ephemeral
+    dedupe_key: normalized key used before writing another record
+    status: active, superseded, archived, expired, or draft
+
+layers:
+  - name: user-preferences
+    scope: user
+    purpose: Durable user preferences that should travel across projects.
+    storage_path: memory/user/preferences.yaml
+    default_retention: until-changed
+    min_confidence_to_write: 0.7
+    allowed_sources:
+      - user
+      - session
+      - curator
+    examples:
+      - prefers Chinese final summaries for private ecosystem work
+      - wants one blueprint task completed before moving to the next
+
+  - name: project-rules
+    scope: project
+    purpose: Repository-specific constraints, architecture rules, and coding conventions.
+    storage_path: memory/project/rules.yaml
+    default_retention: project-lifetime
+    min_confidence_to_write: 0.8
+    allowed_sources:
+      - file
+      - user
+      - session
+      - curator
+    examples:
+      - AGENTS.md requires one task to pause for validation after completion
+      - package skills must use native package discovery paths
+
+  - name: workspace-assets
+    scope: workspace
+    purpose: Local paths, generated artifacts, installed sibling checkouts, and reusable workspace resources.
+    storage_path: memory/workspace/assets.yaml
+    default_retention: until-changed
+    min_confidence_to_write: 0.6
+    allowed_sources:
+      - file
+      - tool
+      - mcp
+      - curator
+    examples:
+      - examples/test-kit is the active lab package
+      - CLI-Anything sibling checkout is absent
+
+  - name: task-archives
+    scope: session
+    purpose: Completed task summaries with outcome, validation, changed files, and follow-up pointers.
+    storage_path: memory/tasks/archive.yaml
+    default_retention: project-lifetime
+    min_confidence_to_write: 0.7
+    allowed_sources:
+      - session
+      - tool
+      - curator
+    examples:
+      - T33 completed unified capability routing and added verifier coverage
+      - T35 completed package release governance
+
+  - name: transient-context
+    scope: session
+    purpose: Short-lived context needed for the current task but not yet promoted to durable memory.
+    storage_path: memory/transient/context.yaml
+    default_retention: ephemeral
+    min_confidence_to_write: 0.4
+    allowed_sources:
+      - user
+      - session
+      - tool
+      - inference
+    expires_after: task-completion
+    promotion_targets:
+      - user-preferences
+      - project-rules
+      - workspace-assets
+      - task-archives
+    examples:
+      - current validation command output
+      - temporary implementation hypothesis
+
+dedupe_policy:
+  key_fields:
+    - layer
+    - scope
+    - dedupe_key
+  normalization:
+    - lowercase
+    - trim whitespace
+    - collapse internal whitespace
+    - normalize path separators for workspace paths
+  on_duplicate:
+    higher_confidence: replace content and keep supersedes pointer
+    same_confidence: update evidence and updated_at only
+    lower_confidence: keep existing record and append source_ref to evidence if useful
+
+retention_policy:
+  permanent: keep until explicit user removal
+  until-changed: keep until contradicted or superseded
+  project-lifetime: keep while the repository or package remains active
+  task-lifetime: expire after task archive is created
+  ephemeral: expire at task completion unless promoted
+
+source_policy:
+  user:
+    trust_floor: 0.9
+    notes: Direct user instruction can create or update durable records.
+  file:
+    trust_floor: 0.8
+    notes: Repository files and manifests are strong evidence for project rules.
+  session:
+    trust_floor: 0.6
+    notes: Session observations need curator review before becoming durable.
+  tool:
+    trust_floor: 0.6
+    notes: Tool output should include enough source_ref to reproduce.
+  mcp:
+    trust_floor: 0.7
+    notes: MCP records should name server and tool call.
+  web:
+    trust_floor: 0.5
+    notes: Web facts require URL and retrieval date.
+  inference:
+    trust_floor: 0.3
+    notes: Inference cannot write durable records without confirmation.
+  curator:
+    trust_floor: 0.7
+    notes: Curator writes must preserve original source refs.

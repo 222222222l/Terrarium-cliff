@@ -1,0 +1,42 @@
+version: 1
+package: test-kit
+status: lab-install-readiness
+description: Offline install-readiness checks before private package release.
+
+supported_platforms:
+  - windows
+  - linux
+
+manifest_resolution:
+  creatures: creatures/{name}/config.yaml
+  terrariums: terrariums/{name}/terrarium.yaml
+  skills: "{path}"
+  tools: "{module}.py"
+  plugins: "{module}.py"
+
+required_verifiers:
+  - command: python ./examples/test-kit/scripts/verify_regression_suite.py --json
+    purpose: all default offline package gates
+  - command: python ./examples/test-kit/scripts/verify_t39_linux_windows_compatibility.py --repo-root .
+    purpose: Linux / Windows compatibility gate
+
+release_notes_required_fields:
+  - package
+  - version
+  - release_track
+  - changed_creatures
+  - changed_terrariums
+  - changed_skills
+  - changed_tools
+  - changed_plugins
+  - changed_policies
+  - validation
+  - rollback_target
+  - known_limitations
+
+private_release_blockers:
+  - unresolved manifest target
+  - missing release notes rollback target
+  - default regression suite failure
+  - Linux / Windows compatibility gate failure
+  - package version does not match release tag

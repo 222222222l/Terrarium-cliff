@@ -1,0 +1,90 @@
+version: 1
+package: test-kit
+status: lab
+description: Distribution and rollback policy for the private test-kit package.
+
+release_tracks:
+  - name: local-dev
+    purpose: Iterate on creatures, tools, skills, and policies in place.
+    install_spec: kt install ./examples/test-kit -e
+    version_source: working tree
+    allowed_for:
+      - local validation
+      - prompt and policy experiments
+      - verifier development
+    publish_gate:
+      - kohaku.yaml remains parseable
+      - changed task verifier passes
+    rollback:
+      mode: editable-revert
+      action: revert the local patch or restore the previous branch state
+
+  - name: private-release
+    purpose: Share a stable internal package snapshot by git URL.
+    install_spec: kt install <private-git-url>
+    version_source: kohaku.yaml version plus git tag
+    allowed_for:
+      - private template reuse
+      - team smoke testing
+      - pinned workflow baselines
+    publish_gate:
+      - default regression suite passes
+      - release notes identify changed creatures, skills, tools, and policies
+      - kohaku.yaml version matches the release tag
+      - rollback target is documented
+    rollback:
+      mode: git-tag-pin
+      action: reinstall or check out the previous known-good tag
+
+  - name: marketplace-candidate
+    purpose: Promote a mature package to a marketplace source.
+    install_spec: kt install @test-kit or kt install @<source>/test-kit
+    version_source: marketplace entry versions
+    allowed_for:
+      - reviewed template distribution
+      - non-editable consumer installs
+      - source-prioritized marketplace discovery
+    publish_gate:
+      - private-release gate is already satisfied
+      - marketplace entry includes repo, tags, author, license, framework, and versions
+      - newest unpinned version is not yanked
+      - incompatible or broken releases are yanked instead of deleted
+    rollback:
+      mode: marketplace-yank
+      action: mark the bad marketplace version yanked and tell users to pin the previous tag
+
+promotion_gates:
+  lab_to_private:
+    - package remains installable through editable local path
+    - all default offline verifiers pass
+    - README explains install and validation paths
+    - experimental-only assets are either documented or removed
+  private_to_marketplace:
+    - package has at least one tagged release
+    - marketplace metadata is complete
+    - version compatibility is declared
+    - rollback plan names the previous known-good version
+
+version_policy:
+  scheme: semver
+  experimental_rule: 0.x versions may change templates or policy fields with release notes
+  stable_rule: 1.x versions must preserve documented install and invocation paths
+  tag_format: vMAJOR.MINOR.PATCH
+
+marketplace_entry_contract:
+  required_fields:
+    - name
+    - repo
+    - description
+    - tags
+    - author
+    - license
+    - framework
+    - versions
+  version_fields:
+    - tag
+    - released
+    - framework
+    - notes
+    - commit
+    - yanked

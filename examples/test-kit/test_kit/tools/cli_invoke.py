@@ -64,7 +64,7 @@ class CliInvokeTool(BaseTool):
                 },
                 "command_text": {
                     "type": "string",
-                    "description": "Preferred fallback for general shell commands when you do not want to emit a JSON array. Example: curl.exe https://qt.gtimg.cn/q=sh600519",
+                    "description": "Preferred fallback for general shell commands when you do not want to emit a JSON array. Example: curl https://qt.gtimg.cn/q=sh600519",
                 },
                 "artifact_expectation": {
                     "type": "array",

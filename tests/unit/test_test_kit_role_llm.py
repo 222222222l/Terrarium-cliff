@@ -13,7 +13,7 @@ import yaml
 
 
 MODULE_PATH = (
-    Path(__file__).resolve().parents[3]
+    Path(__file__).resolve().parents[2]
     / "examples"
     / "test-kit"
     / "test_kit"
@@ -101,7 +101,7 @@ def test_call_role_llm_preserves_http_500_body_and_curl_failure_details(monkeypa
         raise subprocess.CalledProcessError(
             35,
             args[0],
-            stdout=b"",
+            output=b"",
             stderr="SSL connect error".encode("gb18030"),
         )
 
@@ -229,18 +229,44 @@ def test_build_curl_command_adds_ssl_no_revoke_on_windows(monkeypatch):
     )
 
     assert "--ssl-no-revoke" in command
+    assert command[0] == "curl.exe"
+
+
+def test_build_curl_command_uses_plain_curl_on_posix(monkeypatch):
+    role_llm = _load_role_llm_module()
+
+    monkeypatch.setattr(role_llm.os, "name", "posix", raising=False)
+
+    command = role_llm._build_curl_command(
+        "https://example.test/v1/chat/completions",
+        "task-key",
+        "/tmp/payload.json",
+    )
+
+    assert command[0] == "curl"
+    assert "--ssl-no-revoke" not in command
 
 
 @pytest.mark.parametrize(
     ("relative_path", "class_name", "module_name"),
     [
         ("tools/cli_invoke.py", "CliInvokeTool", "test_kit.tools.cli_invoke_test"),
-        ("tools/provider_select.py", "ProviderSelectTool", "test_kit.tools.provider_select_test"),
-        ("tools/result_feedback.py", "ResultFeedbackTool", "test_kit.tools.result_feedback_test"),
+        (
+            "tools/provider_select.py",
+            "ProviderSelectTool",
+            "test_kit.tools.provider_select_test",
+        ),
+        (
+            "tools/result_feedback.py",
+            "ResultFeedbackTool",
+            "test_kit.tools.result_feedback_test",
+        ),
         ("tools/lab_report.py", "LabReportTool", "test_kit.tools.lab_report_test"),
     ],
 )
-def test_custom_tools_keep_base_config(relative_path: str, class_name: str, module_name: str):
+def test_custom_tools_keep_base_config(
+    relative_path: str, class_name: str, module_name: str
+):
     module = _load_module(TEST_KIT_DIR / relative_path, module_name)
     tool_cls = getattr(module, class_name)
 
@@ -259,11 +285,46 @@ def test_cli_runtime_command_probe_accepts_provider_detect_cmd_with_args():
 def test_cli_runtime_command_probe_rejects_missing_provider_detect_cmd_with_args():
     module = _load_module(CLI_RUNTIME_PATH, "test_kit.cli_runtime_test_missing")
 
-    assert module._is_command_available("definitely-missing-provider-probe --version") is False
+    assert (
+        module._is_command_available("definitely-missing-provider-probe --version")
+        is False
+    )
 
 
-def test_sync_script_writes_missing_tool_defaults_without_overwriting_existing_values(tmp_path: Path):
-    module = _load_module(SYNC_SCRIPT_PATH, "test_kit.sync_test_kit_module_configs_test")
+def test_cli_runtime_uses_windows_curl_for_url(monkeypatch):
+    module = _load_module(CLI_RUNTIME_PATH, "test_kit.cli_runtime_test_windows_curl")
+
+    monkeypatch.setattr(module.os, "name", "nt", raising=False)
+
+    assert module._normalize_command({"url": "https://example.test"}) == [
+        "curl.exe",
+        "https://example.test",
+    ]
+
+
+def test_cli_runtime_uses_posix_curl_for_url_and_command_text(monkeypatch):
+    module = _load_module(CLI_RUNTIME_PATH, "test_kit.cli_runtime_test_posix_curl")
+
+    monkeypatch.setattr(module.os, "name", "posix", raising=False)
+
+    assert module._normalize_command({"url": "https://example.test"}) == [
+        "curl",
+        "https://example.test",
+    ]
+    assert module._normalize_command(
+        {"command_text": "curl.exe https://example.test"}
+    ) == [
+        "curl",
+        "https://example.test",
+    ]
+
+
+def test_sync_script_writes_missing_tool_defaults_without_overwriting_existing_values(
+    tmp_path: Path,
+):
+    module = _load_module(
+        SYNC_SCRIPT_PATH, "test_kit.sync_test_kit_module_configs_test"
+    )
     config_path = tmp_path / "config.yaml"
     cli_invoke_module = (TEST_KIT_DIR / "tools" / "cli_invoke.py").resolve()
     result_feedback_module = (TEST_KIT_DIR / "tools" / "result_feedback.py").resolve()

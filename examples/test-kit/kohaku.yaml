@@ -2,16 +2,31 @@ name: test-kit
 version: "0.1.0"
 description: "Minimal lab package for fast creature and terrarium testing"
 
+distribution:
+  lifecycle_stage: lab
+  release_channel: experimental
+  marketplace_eligible: false
+  governance_policy: release-policy.yaml
+  marketplace_name: test-kit
+  framework_constraint: ">=2.0.0"
+  rollback_modes:
+    - editable-revert
+    - git-tag-pin
+    - marketplace-yank
+
 creatures:
   - name: lab-runner
   - name: root-privileged
   - name: coordinator
   - name: worker-base
   - name: critic
+  - name: curator
+  - name: evolver
 
 terrariums:
   - name: lab-smoke
   - name: task-team-minimal
+  - name: task-team-learning
 
 skills:
   - name: autonomous-cli-builder
@@ -29,6 +44,12 @@ skills:
   - name: review-protocol
     path: skills/review-protocol/SKILL.md
     description: Stable critic-side review skill for compact typed feedback and routing.
+  - name: memory-curation
+    path: skills/memory-curation/SKILL.md
+    description: Layered memory curation workflow aligned with the test-kit memory schema.
+  - name: evolution-draft-protocol
+    path: skills/evolution-draft-protocol/SKILL.md
+    description: Draft-only evolution proposal protocol for skills, prompts, policies, and memory rules.
 
 tools:
   - name: lab_report
@@ -49,3 +70,8 @@ tools:
   - name: result_feedback
     module: test_kit.tools.result_feedback
     class: ResultFeedbackTool
+
+plugins:
+  - name: audit_guard
+    module: test_kit.plugins.audit_guard
+    class: AuditGuardPlugin

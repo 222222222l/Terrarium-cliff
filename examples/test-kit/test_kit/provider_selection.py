@@ -12,43 +12,86 @@ def select_provider_for_task(
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
     registry = _load_registry(
-        registry_path or repo_root / "examples" / "test-kit" / "registry" / "registry.yaml"
+        registry_path
+        or repo_root / "examples" / "test-kit" / "registry" / "registry.yaml"
     )
 
     preferred_provider = _clean(task_card.get("preferred_provider"))
     task_kind = _clean(task_card.get("task_kind"))
     access_mode = _clean(task_card.get("access_mode"))
     target_hint = _clean(task_card.get("target_hint"))
+    mcp_server_hint = _clean(task_card.get("mcp_server_hint"))
     needs_browser_session = task_card.get("needs_browser_session")
     artifact_expectation = _normalize_list(task_card.get("artifact_expectation"))
 
-    providers = {item["name"]: item for item in registry.get("providers", []) if isinstance(item, dict)}
-    if preferred_provider:
+    providers = {
+        item["name"]: item
+        for item in registry.get("providers", [])
+        if isinstance(item, dict)
+    }
+    if preferred_provider and preferred_provider != "none":
         if preferred_provider not in providers:
             raise ValueError(f"Unknown preferred_provider: {preferred_provider}")
         return _selected_result(
             provider_name=preferred_provider,
+            execution_surface="external_cli",
+            capability_route=f"provider:{preferred_provider}",
             reason="explicit preferred_provider",
             task_kind=task_kind,
             artifact_expectation=artifact_expectation,
             decision_source="preferred_provider",
+            recommended_tools=["cli_invoke"],
+        )
+
+    if task_kind in {"docs_task", "codebase_edit_task", "analysis_task"}:
+        return _selected_result(
+            provider_name="none",
+            execution_surface="built-in_tools",
+            capability_route=task_kind,
+            reason=f"task_kind:{task_kind}",
+            task_kind=task_kind,
+            artifact_expectation=artifact_expectation,
+            decision_source="task_kind",
+            recommended_tools=_builtin_tools_for_task_kind(task_kind),
+        )
+
+    if task_kind in {"mcp_task", "mcp_tool_task"} or access_mode == "mcp":
+        return _selected_result(
+            provider_name="none",
+            execution_surface="mcp",
+            capability_route=mcp_server_hint or "mcp:auto",
+            reason=f"task_kind:{task_kind or 'mcp'}",
+            task_kind=task_kind or "mcp_tool_task",
+            artifact_expectation=artifact_expectation,
+            decision_source="mcp_requirement",
+            recommended_tools=["mcp_list", "mcp_call"],
         )
 
     if task_kind in {"local_software_task", "service_cli_task"}:
         return _selected_result(
             provider_name="cli-anything",
+            execution_surface="external_cli",
+            capability_route=task_kind,
             reason=f"task_kind:{task_kind}",
             task_kind=task_kind,
             artifact_expectation=artifact_expectation,
             decision_source="task_kind",
+            recommended_tools=["cli_invoke"],
         )
-    if task_kind in {"browser_authenticated_task", "desktop_app_task", "external_cli_passthrough"}:
+    if task_kind in {
+        "browser_authenticated_task",
+        "desktop_app_task",
+        "external_cli_passthrough",
+    }:
         return _selected_result(
             provider_name="opencli",
+            execution_surface="external_cli",
+            capability_route=task_kind,
             reason=f"task_kind:{task_kind}",
             task_kind=task_kind,
             artifact_expectation=artifact_expectation,
             decision_source="task_kind",
+            recommended_tools=["cli_invoke"],
         )
     if task_kind == "browser_public_task":
         return _needs_user_choice_result(
@@ -61,29 +104,42 @@ def select_provider_for_task(
     if access_mode in {"local", "service"}:
         return _selected_result(
             provider_name="cli-anything",
+            execution_surface="external_cli",
+            capability_route=task_kind or "service_cli_task",
             reason=f"access_mode:{access_mode}",
             task_kind=task_kind or "service_cli_task",
             artifact_expectation=artifact_expectation,
             decision_source="access_mode",
+            recommended_tools=["cli_invoke"],
         )
     if access_mode == "desktop":
         return _selected_result(
             provider_name="opencli",
+            execution_surface="external_cli",
+            capability_route=task_kind or "desktop_app_task",
             reason="access_mode:desktop",
             task_kind=task_kind or "desktop_app_task",
             artifact_expectation=artifact_expectation,
             decision_source="access_mode",
+            recommended_tools=["cli_invoke"],
         )
     if access_mode == "browser":
         if needs_browser_session is True:
             return _selected_result(
                 provider_name="opencli",
+                execution_surface="external_cli",
+                capability_route=task_kind or "browser_authenticated_task",
                 reason="browser task requires live browser session",
                 task_kind=task_kind or "browser_authenticated_task",
                 artifact_expectation=artifact_expectation,
                 decision_source="browser_session_requirement",
+                recommended_tools=["cli_invoke"],
             )
-        if needs_browser_session is False and target_hint in {"adapter", "site", "website"}:
+        if needs_browser_session is False and target_hint in {
+            "adapter",
+            "site",
+            "website",
+        }:
             return _needs_user_choice_result(
                 reason="browser task is public but may fit either reusable CLI or OpenCLI adapter",
                 task_kind=task_kind or "browser_public_task",
@@ -116,19 +172,25 @@ def _load_registry(path: Path) -> dict[str, Any]:
 def _selected_result(
     *,
     provider_name: str,
+    execution_surface: str,
+    capability_route: str,
     reason: str,
     task_kind: str,
     artifact_expectation: list[str],
     decision_source: str,
+    recommended_tools: list[str],
 ) -> dict[str, Any]:
     return {
         "decision_status": "selected",
         "preferred_provider": provider_name,
+        "execution_surface": execution_surface,
+        "capability_route": capability_route,
         "task_kind": task_kind,
         "artifact_expectation": artifact_expectation,
         "decision_reason": reason,
         "decision_source": decision_source,
-        "candidate_providers": [provider_name],
+        "recommended_tools": recommended_tools,
+        "candidate_providers": [] if provider_name == "none" else [provider_name],
         "user_choice_required": False,
     }
 
@@ -159,10 +221,13 @@ def _needs_user_choice_result(
     return {
         "decision_status": "needs_user_choice",
         "preferred_provider": None,
+        "execution_surface": "external_cli",
+        "capability_route": task_kind,
         "task_kind": task_kind,
         "artifact_expectation": artifact_expectation,
         "decision_reason": reason,
         "decision_source": "overlap_guard",
+        "recommended_tools": ["ask_user", "cli_invoke"],
         "candidate_providers": ["cli-anything", "opencli"],
         "user_choice_required": True,
         "user_choice_prompt": prompt,
@@ -181,3 +246,13 @@ def _normalize_list(value: Any) -> list[str]:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+def _builtin_tools_for_task_kind(task_kind: str) -> list[str]:
+    if task_kind == "codebase_edit_task":
+        return ["glob", "grep", "read", "edit"]
+    if task_kind == "docs_task":
+        return ["glob", "grep", "read", "edit"]
+    if task_kind == "analysis_task":
+        return ["read", "grep", "json_read"]
+    return ["read"]

@@ -31,10 +31,21 @@ def test_verify_regression_suite_lists_default_tasks():
         "T7",
         "T8",
         "T9-T10",
+        "T12",
+        "T11-T14",
+        "T15",
+        "T16",
+        "T17",
+        "T18-T19",
         "T23",
         "T24",
         "T25",
         "T30-T32",
+        "T33",
+        "T35",
+        "T38",
+        "T39",
+        "T40",
     ]
 
 
@@ -52,4 +63,4 @@ def test_verify_regression_suite_default_run_passes():
     assert summary["status"] == "PASS"
     assert summary["failed"] == 0
     assert summary["skipped"] == 0
-    assert summary["passed"] == 10
+    assert summary["passed"] == 21

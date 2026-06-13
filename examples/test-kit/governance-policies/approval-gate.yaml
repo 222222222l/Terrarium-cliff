@@ -1,0 +1,106 @@
+version: 1
+name: approval-gate
+status: active-policy
+description: Project approval policy that scopes the built-in permgate plugin.
+
+builtin_plugin:
+  name: permgate
+  rationale: Reuse the framework confirmation engine instead of implementing a second approval runtime.
+  required_options:
+    - gated_tools
+    - allowlist
+    - timeout_s
+    - surface
+
+protected_action_classes:
+  - id: workspace-write
+    description: Writes or edits files in the current workspace.
+    gated_tools:
+      - write
+      - edit
+    required_metadata:
+      - action_kind
+      - target_path
+      - source_ref
+      - approval_reason
+      - rollback_plan
+
+  - id: external-execution
+    description: Runs an external CLI provider or service adapter.
+    gated_tools:
+      - cli_invoke
+    required_metadata:
+      - action_kind
+      - provider
+      - source_ref
+      - approval_reason
+      - artifact_expectation
+
+  - id: rule-activation
+    description: Promotes a draft memory, skill, prompt, or policy rule to active use.
+    gated_tools:
+      - write
+      - edit
+    required_metadata:
+      - action_kind
+      - proposal_id
+      - source_ref
+      - scope
+      - approval_reason
+      - rollback_plan
+
+role_bindings:
+  worker-base:
+    plugin: permgate
+    gated_tools:
+      - edit
+      - cli_invoke
+    allowlist:
+      - read
+      - glob
+      - grep
+      - json_read
+      - result_feedback
+      - stop_task
+
+  curator:
+    plugin: permgate
+    gated_tools:
+      - write
+      - edit
+    allowlist:
+      - read
+      - glob
+      - grep
+      - json_read
+      - scratchpad
+      - think
+      - result_feedback
+      - lab_report
+      - stop_task
+
+metadata_contract:
+  required_fields:
+    - action_kind
+    - risk_level
+    - source_ref
+    - approval_reason
+    - rollback_plan
+  risk_levels:
+    - low
+    - medium
+    - high
+  source_ref_examples:
+    - task_card id
+    - review_result id
+    - memory schema path
+    - proposal file path
+
+denial_feedback:
+  status: blocked
+  required_fields:
+    - blocked_by
+    - action_kind
+    - reason
+    - next_safe_step
+  message_template: "approval-gate: {action_kind} blocked by {blocked_by}; {next_safe_step}"
